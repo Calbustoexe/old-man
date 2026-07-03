@@ -1,14 +1,14 @@
 """
 Member profile persistence layer.
 Handles creation, retrieval, updating, and deletion of member profiles.
+
+Persistance : base Turso (libSQL) via l'adaptateur data/db_conn.py.
 """
 
-import aiosqlite
 import time
-from pathlib import Path
+from data import db_conn as aiosqlite
 
-
-DB_PATH = Path(__file__).parent / "urahara.db"
+DB_PATH = None  # non utilisé : la cible réelle vient des variables d'environnement Turso
 
 
 async def _get_table_columns(table_name: str) -> list[str]:

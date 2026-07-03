@@ -1,12 +1,13 @@
 """
 Persistance des profils de division, des sessions d'interaction (/division-config)
 et de l'historique des grades (vice-capitaine / lieutenant) pour /division-profil.
+
+Persistance : base Turso (libSQL) via l'adaptateur data/db_conn.py.
 """
 import json
-import pathlib
-import aiosqlite
+from data import db_conn as aiosqlite
 
-DB_PATH = pathlib.Path(__file__).parent / "urahara.db"
+DB_PATH = None  # non utilisé : la cible réelle vient des variables d'environnement Turso
 
 
 async def _get_table_columns(db: aiosqlite.Connection, table: str) -> set[str]:
@@ -282,4 +283,4 @@ async def get_grade_grant(user_id: int, division_number: int, grade: str) -> aio
             "SELECT * FROM division_grade_history WHERE user_id = ? AND division_number = ? AND grade = ?",
             (user_id, division_number, grade),
         ) as cur:
-            return await cur.fetchone() 
+            return await cur.fetchone()

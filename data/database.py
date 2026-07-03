@@ -1,11 +1,14 @@
 """
-Gestion de la base de données SQLite pour Urahara.
+Gestion de la base de données pour Urahara.
 Toutes les tables et fonctions d'accès aux données du bot passent par ici.
-"""
-import pathlib
-import aiosqlite
 
-DB_PATH = pathlib.Path(__file__).parent / "urahara.db"
+Persistance : la base tourne sur Turso (libSQL hébergé) via l'adaptateur
+`data/db_conn.py`, qui reproduit l'API aiosqlite utilisée ci-dessous.
+Voir data/db_conn.py pour la configuration (TURSO_DATABASE_URL / TURSO_AUTH_TOKEN).
+"""
+from data import db_conn as aiosqlite
+
+DB_PATH = None  # non utilisé : la cible réelle vient des variables d'environnement Turso
 
 # ---------------------------------------------------------------------------
 # Initialisation
