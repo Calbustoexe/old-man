@@ -163,6 +163,15 @@ class _ExecuteAwaitable:
             if "duplicate column name" in msg.lower() or "already exists" in msg.lower():
                 raise OperationalError(msg) from e
             raise
+        except KeyError as e:
+            # En mode HTTP, libsql_client attend une clé "result" dans la réponse JSON.
+            # Quand la requête échoue côté serveur (ex: ALTER TABLE ADD COLUMN sur une
+            # colonne déjà existante), l'API renvoie une erreur sans cette clé, et
+            # libsql_client lève un KeyError('result') au lieu d'une LibsqlError propre.
+            # On le traite comme une OperationalError générique pour laisser le code
+            # appelant (try/except aiosqlite.OperationalError dans database.py) gérer
+            # ce cas normalement, plutôt que de faire planter tout le bot au démarrage.
+            raise OperationalError(f"Requête échouée côté serveur ({e})") from e
         self._cursor = _Cursor(result, self._row_factory)
         return self._cursor
 
