@@ -37,7 +37,19 @@ import libsql_client
 # Alias pour coller à l'API aiosqlite (aiosqlite.Row == sqlite3.Row côté usage: accès par nom de colonne)
 Row = sqlite3.Row
 
+def _normalize_url(url: str) -> str:
+    """Force le protocole HTTP (au lieu de libsql:// -> WebSocket) car le handshake
+    WebSocket échoue dans certains environnements conteneurisés (ex: Railway),
+    avec une erreur `WSServerHandshakeError: 400, Invalid response status`.
+    Le mode HTTP est parfaitement supporté par Turso et évite ce problème."""
+    if url.startswith("libsql://"):
+        return "https://" + url[len("libsql://"):]
+    return url
+
+
 TURSO_DATABASE_URL = os.getenv("TURSO_DATABASE_URL")
+if TURSO_DATABASE_URL:
+    TURSO_DATABASE_URL = _normalize_url(TURSO_DATABASE_URL)
 TURSO_AUTH_TOKEN = os.getenv("TURSO_AUTH_TOKEN")
 
 # Fallback local (dev sans Turso) : fichier sqlite classique à côté de ce module.
