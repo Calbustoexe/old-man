@@ -394,20 +394,26 @@ async def build_division(
 
     try:
         category = await guild.create_category(name=category_name, overwrites=base_overwrites)
+        logger.info("Catégorie créée : id=%s name=%s", category.id, category.name)
 
         general_channel = await guild.create_text_channel("💬・general", category=category)
+        logger.info("Salon general créé sous category_id=%s", category.id)
 
         announce_overwrites = dict(base_overwrites)
         announce_overwrites[division_role] = discord.PermissionOverwrite(view_channel=True, send_messages=False)
         announce_channel = await guild.create_text_channel("📢・annonces", category=category, overwrites=announce_overwrites)
+        logger.info("Salon annonces créé sous category_id=%s", category.id)
         if captain_role:
             await announce_channel.set_permissions(captain_role, send_messages=True)
         if vice_role:
             await announce_channel.set_permissions(vice_role, send_messages=True)
 
         entrants_channel = await guild.create_text_channel("📥・entrants", category=category)
+        logger.info("Salon entrants créé sous category_id=%s", category.id)
         sortants_channel = await guild.create_text_channel("📤・sortants", category=category)
+        logger.info("Salon sortants créé sous category_id=%s", category.id)
         invite_channel = await guild.create_text_channel("📨・invitations", category=category, overwrites=base_overwrites)
+        logger.info("Salon invitations créé sous category_id=%s", category.id)
 
     except discord.Forbidden:
         await progress_message.edit(
@@ -418,6 +424,7 @@ async def build_division(
         )
         return
     except discord.HTTPException as e:
+        logger.exception("Echec création division %s : status=%s code=%s text=%s", division_number, getattr(e, "status", None), getattr(e, "code", None), getattr(e, "text", None))
         await progress_message.edit(embed=error_embed(f"Erreur Discord lors de la création : `{e}`"))
         return
 
