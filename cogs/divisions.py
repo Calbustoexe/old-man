@@ -409,14 +409,6 @@ async def build_division(
         sortants_channel = await guild.create_text_channel("📤・sortants", category=category)
         invite_channel = await guild.create_text_channel("📨・invitations", category=category, overwrites=base_overwrites)
 
-        target_position = await compute_category_position(guild, division_number)
-        if target_position is not None:
-            try:
-                fresh_category = guild.get_channel(category.id) or category
-                await fresh_category.edit(position=target_position)
-            except discord.HTTPException:
-                logger.warning("Impossible de repositionner la catégorie de la division %s.", division_number)
-
     except discord.Forbidden:
         await progress_message.edit(
             embed=error_embed(
