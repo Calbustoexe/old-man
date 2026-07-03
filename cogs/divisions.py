@@ -368,8 +368,11 @@ async def compute_category_position(guild: discord.Guild, division_number: int) 
     # la plus grande ; sinon on se place directement devant Espace Communautaire.
     lower_categories = sorted((n, c) for n, c in existing_categories if n < division_number)
     if lower_categories:
-        return lower_categories[-1][1].position + 1
-    return community_category.position
+        position = lower_categories[-1][1].position + 1
+    else:
+        position = community_category.position
+
+    return max(position, 0)
 
 
 async def build_division(
@@ -392,13 +395,6 @@ async def build_division(
     try:
         category = await guild.create_category(name=category_name, overwrites=base_overwrites)
 
-        target_position = await compute_category_position(guild, division_number)
-        if target_position is not None:
-            try:
-                await category.edit(position=target_position)
-            except discord.HTTPException:
-                logger.warning("Impossible de repositionner la catégorie de la division %s.", division_number)
-
         general_channel = await guild.create_text_channel("💬・general", category=category)
 
         announce_overwrites = dict(base_overwrites)
@@ -412,6 +408,14 @@ async def build_division(
         entrants_channel = await guild.create_text_channel("📥・entrants", category=category)
         sortants_channel = await guild.create_text_channel("📤・sortants", category=category)
         invite_channel = await guild.create_text_channel("📨・invitations", category=category, overwrites=base_overwrites)
+
+        target_position = await compute_category_position(guild, division_number)
+        if target_position is not None:
+            try:
+                fresh_category = guild.get_channel(category.id) or category
+                await fresh_category.edit(position=target_position)
+            except discord.HTTPException:
+                logger.warning("Impossible de repositionner la catégorie de la division %s.", division_number)
 
     except discord.Forbidden:
         await progress_message.edit(
