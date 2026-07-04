@@ -142,13 +142,7 @@ class MemberProfile(commands.Cog):
                     if div_number is None:
                         continue
                     
-                    # Get division from database
-                    async with db.aiosqlite.connect(db.DB_PATH) as database:
-                        database.row_factory = db.aiosqlite.Row
-                        cursor = await database.execute(
-                            "SELECT * FROM divisions WHERE number = ?", (div_number,)
-                        )
-                        div = await cursor.fetchone()
+                    div = await db.get_division(div_number)
                     
                     if div:
                         division_info = div
@@ -169,7 +163,7 @@ class MemberProfile(commands.Cog):
                             grade_text = "Membre"
                         
                         break  # Primary division found
-                except Exception as e:
+                except (discord.HTTPException, KeyError, TypeError):
                     continue
         
         # Get profile picture (custom or Discord default)
@@ -185,7 +179,7 @@ class MemberProfile(commands.Cog):
                 full_member = await member.guild.fetch_member(member.id)
                 if full_member.banner:
                     banner = full_member.banner.url
-            except Exception:
+            except discord.HTTPException:
                 pass
         
         # Get color from profile or default

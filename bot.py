@@ -25,15 +25,24 @@ intents.members = True
 bot = commands.Bot(command_prefix=PREFIX, intents=intents, description="Urahara dcp - RP Bleach Bot")
 
 
+_ready_once = False
+
+
 @bot.event
 async def on_ready():
+    global _ready_once
     print(f"Connected as {bot.user} (ID: {bot.user.id})")
     await bot.change_presence(activity=discord.Activity(type=discord.ActivityType.watching, name="Yoruichi"))
-    
-    # Initialiser la table division_profiles
+
+    if _ready_once:
+        # on_ready peut se redéclencher après une reconnexion réseau (normal sur
+        # Railway) : on ne refait ni l'init DB ni le sync global à chaque fois.
+        return
+    _ready_once = True
+
     await div_db.init_profiles_tables()
     print("Division profiles table initialized.")
-    
+
     try:
         synced = await bot.tree.sync()
         print(f"Synced {len(synced)} slash command(s) globally.")

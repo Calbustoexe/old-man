@@ -298,7 +298,7 @@ async def handle_ticket_close(interaction: discord.Interaction, ticket_id: int):
     guild = interaction.guild
     channel = interaction.channel
 
-    history = [m async for m in channel.history(limit=None, oldest_first=True)]
+    history = [m async for m in channel.history(limit=500, oldest_first=True)]
     transcript_lines = [f"{m.author}: {m.content}" for m in history if m.id != ticket["message_id"] and m.content]
 
     if ticket["status"] == "pending":
@@ -350,19 +350,33 @@ class Tickets(commands.Cog):
 
     async def refresh_panels(self, guild: discord.Guild):
         divisions = await db.get_all_divisions()
+        embed = await build_panel_embed(guild, divisions)
         for panel in await db.get_panel_messages():
             channel = guild.get_channel(panel["channel_id"])
             if channel is None:
+                # Le salon lui-même n'existe plus : impossible de recréer où que ce soit.
                 await db.remove_panel_message(panel["message_id"])
                 continue
             try:
                 msg = await channel.fetch_message(panel["message_id"])
             except discord.NotFound:
+                # Le message a été supprimé manuellement (par erreur ou nettoyage du salon) :
+                # on le recrée automatiquement dans le même salon plutôt que de forcer
+                # un nouveau d!panel. C'est la seule vraie "persistance" possible ici,
+                # Discord ne permettant pas de retrouver un message supprimé.
                 await db.remove_panel_message(panel["message_id"])
+                try:
+                    view = PanelView(divisions)
+                    new_msg = await channel.send(embed=embed, view=view)
+                    self.bot.add_view(view, message_id=new_msg.id)
+                    await db.add_panel_message(channel.id, new_msg.id)
+                    logger.info("Panel recréé automatiquement dans #%s (message précédent supprimé).", channel.name)
+                except discord.HTTPException:
+                    logger.exception("Impossible de recréer automatiquement le panel dans #%s.", channel.name)
                 continue
             except discord.HTTPException:
                 continue
-            embed = await build_panel_embed(guild, divisions)
+
             view = PanelView(divisions)
             try:
                 await msg.edit(embed=embed, view=view)
@@ -387,10 +401,12 @@ class Tickets(commands.Cog):
             await ctx.send(embed=div_mod.error_embed("Cette commande ne fonctionne que dans un ticket de candidature en attente."))
             return
         div = await db.get_division(ticket["division_number"])
-        if div is None or ctx.author.id != div["captain_id"]:
-            if not ctx.author.guild_permissions.administrator:
-                await ctx.send(embed=div_mod.error_embed("Seul le capitaine de la division peut utiliser cette commande."))
-                return
+        if div is None:
+            await ctx.send(embed=div_mod.error_embed("Cette division n'existe plus."))
+            return
+        if ctx.author.id != div["captain_id"] and not ctx.author.guild_permissions.administrator:
+            await ctx.send(embed=div_mod.error_embed("Seul le capitaine de la division peut utiliser cette commande."))
+            return
 
         guild = ctx.guild
         _, _, _, count = await div_mod.get_division_staff(guild, div)

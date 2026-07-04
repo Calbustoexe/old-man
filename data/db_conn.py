@@ -73,7 +73,7 @@ class _Cursor:
     def __init__(self, result_set: libsql_client.ResultSet, row_factory):
         self._rows = list(result_set.rows) if result_set is not None else []
         self._columns = list(result_set.columns) if result_set is not None else []
-        self.lastrowid = getattr(result_set, "last_insert_rowid", None)
+        self.lastrowid = None  # rempli explicitement par _ExecuteAwaitable._run après un INSERT
         self._row_factory = row_factory
         self._index = 0
 
@@ -154,8 +154,26 @@ class _ExecuteAwaitable:
     async def _run(self) -> _Cursor:
         if self._cursor is not None:
             return self._cursor
+
+        stripped = self._sql.lstrip().upper()
+        needs_rowid = stripped.startswith("INSERT")
+
         try:
-            result = await self._client.execute(self._sql, self._params)
+            if needs_rowid:
+                # CRITIQUE : en mode HTTP, deux appels execute() séparés peuvent atterrir
+                # sur des connexions logiques différentes, et last_insert_rowid() renverrait
+                # alors une valeur fausse ou nulle. batch() garantit que l'INSERT et le
+                # SELECT last_insert_rowid() s'exécutent sur LA MÊME connexion logique.
+                statements = [
+                    libsql_client.Statement(self._sql, self._params),
+                    libsql_client.Statement("SELECT last_insert_rowid()"),
+                ]
+                results = await self._client.batch(statements)
+                result, id_result = results[0], results[1]
+                lastrowid = id_result.rows[0][0] if id_result.rows else None
+            else:
+                result = await self._client.execute(self._sql, self._params)
+                lastrowid = None
         except libsql_client.LibsqlError as e:
             msg = str(e)
             # ALTER TABLE ... ADD COLUMN sur une colonne déjà existante -> comportement
@@ -172,7 +190,10 @@ class _ExecuteAwaitable:
             # appelant (try/except aiosqlite.OperationalError dans database.py) gérer
             # ce cas normalement, plutôt que de faire planter tout le bot au démarrage.
             raise OperationalError(f"Requête échouée côté serveur ({e})") from e
+
         self._cursor = _Cursor(result, self._row_factory)
+        if needs_rowid:
+            self._cursor.lastrowid = lastrowid
         return self._cursor
 
     def __await__(self):
