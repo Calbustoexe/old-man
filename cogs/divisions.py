@@ -1048,27 +1048,33 @@ class Divisions(commands.Cog):
         if find_division_roles(membre):
             await interaction.response.send_message(embed=error_embed(f"{membre.mention} fait déjà partie d'une autre division."), ephemeral=True)
             return
+
+        # On defer dès que les vérifications rapides (en mémoire, sans DB) sont
+        # passées : tout ce qui suit enchaîne plusieurs requêtes réseau vers
+        # Turso et peut dépasser les 3s de budget avant expiration du token.
+        await interaction.response.defer(ephemeral=True, thinking=True)
+
         if await db.is_division_blocked(membre.id, division_number):
-            await interaction.response.send_message(embed=error_embed(f"{membre.mention} a bloqué les invitations de cette division."), ephemeral=True)
+            await interaction.followup.send(embed=error_embed(f"{membre.mention} a bloqué les invitations de cette division."), ephemeral=True)
             return
         if await db.get_pending_invite(division_number, membre.id):
-            await interaction.response.send_message(embed=error_embed(f"Une invitation est déjà en attente pour {membre.mention}."), ephemeral=True)
+            await interaction.followup.send(embed=error_embed(f"Une invitation est déjà en attente pour {membre.mention}."), ephemeral=True)
             return
 
         now = int(discord.utils.utcnow().timestamp())
         ban = await db.get_division_ban(membre.id, division_number)
         if ban and (ban["banned_until"] is None or ban["banned_until"] > now):
-            await interaction.response.send_message(embed=error_embed(f"{membre.mention} est banni de cette division."), ephemeral=True)
+            await interaction.followup.send(embed=error_embed(f"{membre.mention} est banni de cette division."), ephemeral=True)
             return
         expulsion = await db.get_division_expulsion(membre.id, division_number)
         if expulsion and expulsion["until_ts"] > now:
-            await interaction.response.send_message(
+            await interaction.followup.send(
                 embed=error_embed(f"{membre.mention} a été expulsé récemment, impossible de l'inviter avant <t:{expulsion['until_ts']}:F>."), ephemeral=True
             )
             return
         _, _, _, current_count = await get_division_staff(guild, div)
         if current_count >= MAX_DIVISION_MEMBERS:
-            await interaction.response.send_message(
+            await interaction.followup.send(
                 embed=error_embed(f"La division {division_number} est complète ({MAX_DIVISION_MEMBERS}/{MAX_DIVISION_MEMBERS})."), ephemeral=True
             )
             return
@@ -1077,18 +1083,16 @@ class Divisions(commands.Cog):
         if not author.guild_permissions.administrator:
             sanction = await db.get_sanction(membre.id)
             if sanction and sanction["no_join_until"] and sanction["no_join_until"] > now:
-                await interaction.response.send_message(
+                await interaction.followup.send(
                     embed=error_embed(f"{membre.mention} ne peut pas rejoindre de division avant <t:{sanction['no_join_until']}:F>."), ephemeral=True
                 )
                 return
             leave_cd = await db.get_leave_cooldown(membre.id, division_number)
             if leave_cd and leave_cd["no_rejoin_until"] > now:
-                await interaction.response.send_message(
+                await interaction.followup.send(
                     embed=error_embed(f"{membre.mention} ne peut pas rejoindre cette division avant <t:{leave_cd['no_rejoin_until']}:F>."), ephemeral=True
                 )
                 return
-
-        await interaction.response.defer(ephemeral=True, thinking=True)
 
         invite_channel = await get_or_create_invite_channel(guild, div, division_role)
         try:

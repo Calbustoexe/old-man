@@ -105,7 +105,11 @@ async def main():
     if not TOKEN:
         print("TOKEN not found. Please create a .env file with TOKEN=your_token_here")
         return
-    await bot.start(TOKEN)
+    try:
+        await bot.start(TOKEN)
+    finally:
+        from data import db_conn
+        await db_conn.close_shared_client()
 
 
 if __name__ == "__main__":

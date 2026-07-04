@@ -228,38 +228,47 @@ class _Connection:
         pass
 
     async def close(self):
-        await self._client.close()
+        # Ne rien faire ici : le client est partagé (singleton géré par
+        # _ConnectContextManager) et ne doit pas être fermé à chaque `async with`.
+        # Voir close_shared_client() pour la fermeture réelle au shutdown.
+        pass
 
     async def __aenter__(self):
         return self
 
     async def __aexit__(self, exc_type, exc, tb):
-        await self.close()
         return False
 
 
 class _ConnectContextManager:
-    """Permet `async with connect(...) as db:` en créant le client à l'entrée
-    et en le fermant proprement à la sortie (comme aiosqlite.connect)."""
+    """Permet `async with connect(...) as db:` en réutilisant un client Turso
+    UNIQUE et persistant pour toute la durée de vie du process, au lieu d'en
+    recréer un (avec handshake TLS/HTTP complet) à chaque requête.
 
-    def __init__(self):
-        self._conn: _Connection | None = None
+    Avant ce changement, chaque `db.get_xxx()` payait le coût plein d'une
+    nouvelle connexion HTTP à Turso. Une commande enchaînant 5-10 requêtes
+    (ex: /division-inviter) pouvait alors dépasser les 3 secondes que Discord
+    accorde avant d'invalider le token d'interaction -> `Unknown interaction`
+    sur le tout premier `response.defer()`."""
+
+    _shared_client: libsql_client.Client | None = None
 
     async def __aenter__(self) -> _Connection:
-        if TURSO_DATABASE_URL and TURSO_AUTH_TOKEN:
-            client = libsql_client.create_client(
-                url=TURSO_DATABASE_URL,
-                auth_token=TURSO_AUTH_TOKEN,
-            )
-        else:
-            # Fallback local pour développement sans variables Turso définies.
-            client = libsql_client.create_client(url=_to_libsql_url(_LOCAL_FALLBACK_PATH))
-        self._conn = _Connection(client)
-        return self._conn
+        cls = type(self)
+        if cls._shared_client is None:
+            if TURSO_DATABASE_URL and TURSO_AUTH_TOKEN:
+                cls._shared_client = libsql_client.create_client(
+                    url=TURSO_DATABASE_URL,
+                    auth_token=TURSO_AUTH_TOKEN,
+                )
+            else:
+                # Fallback local pour développement sans variables Turso définies.
+                cls._shared_client = libsql_client.create_client(url=_to_libsql_url(_LOCAL_FALLBACK_PATH))
+        return _Connection(cls._shared_client)
 
     async def __aexit__(self, exc_type, exc, tb):
-        if self._conn is not None:
-            await self._conn.close()
+        # Le client est partagé et persistant : on ne le ferme JAMAIS ici,
+        # seulement via close_shared_client() au shutdown du bot.
         return False
 
     def __await__(self):
@@ -269,10 +278,19 @@ class _ConnectContextManager:
         return _get().__await__()
 
 
+async def close_shared_client():
+    """À appeler explicitement à l'arrêt propre du bot (facultatif : sinon le
+    process se termine et la connexion HTTP sous-jacente est simplement coupée)."""
+    if _ConnectContextManager._shared_client is not None:
+        await _ConnectContextManager._shared_client.close()
+        _ConnectContextManager._shared_client = None
+
+
 def connect(_db_path_ignored=None) -> _ConnectContextManager:
     """Signature compatible avec aiosqlite.connect(DB_PATH).
     Le paramètre est ignoré : la cible réelle vient de TURSO_DATABASE_URL / TURSO_AUTH_TOKEN,
     avec fallback sur un fichier local si ces variables ne sont pas définies.
+    Le client sous-jacent est un singleton partagé (voir _ConnectContextManager).
     """
     return _ConnectContextManager()
 
