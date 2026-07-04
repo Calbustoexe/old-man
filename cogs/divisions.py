@@ -17,6 +17,7 @@ Cog de gestion des divisions du Gotei (RP Bleach).
 import os
 import re
 import sys
+import asyncio
 import pathlib
 import logging
 
@@ -258,6 +259,44 @@ async def refresh_panels(client: discord.Client, guild: discord.Guild):
     cog = client.get_cog("Tickets")
     if cog:
         await cog.refresh_panels(guild)
+
+
+# ---------------------------------------------------------------------------
+# Rafraîchissement automatique et "débounced" des panels
+#
+# De nombreux événements changent l'effectif d'une division (accepter/refuser
+# une invitation, quitter, expulsion, ban, dissolution, acceptation de ticket,
+# promotion...). Plutôt que d'ajouter un appel à refresh_panels() après chacun
+# de ces (nombreux) points, on centralise ça via un listener on_member_update
+# qui détecte tout changement de rôle de division/grade et planifie un seul
+# refresh (avec un léger délai pour regrouper plusieurs changements rapprochés,
+# par ex. add_roles + remove_roles lors d'un remplacement de division).
+# ---------------------------------------------------------------------------
+
+_pending_refresh_tasks: dict[int, asyncio.Task] = {}
+_REFRESH_DEBOUNCE_SECONDS = 2.0
+
+
+def schedule_panels_refresh(client: discord.Client, guild: discord.Guild):
+    """Planifie un refresh_panels() pour cette guild, en regroupant les appels
+    rapprochés (debounce). Sûr à appeler plusieurs fois de suite."""
+    existing = _pending_refresh_tasks.get(guild.id)
+    if existing and not existing.done():
+        existing.cancel()
+
+    async def _run():
+        try:
+            await asyncio.sleep(_REFRESH_DEBOUNCE_SECONDS)
+            await refresh_panels(client, guild)
+        except asyncio.CancelledError:
+            pass
+        except Exception:
+            logger.exception("Erreur lors du refresh automatique des panels pour %s", guild.id)
+        finally:
+            if _pending_refresh_tasks.get(guild.id) is asyncio.current_task():
+                _pending_refresh_tasks.pop(guild.id, None)
+
+    _pending_refresh_tasks[guild.id] = asyncio.create_task(_run())
 
 
 def build_base_overwrites(guild: discord.Guild, division_role: discord.Role) -> dict:
@@ -881,14 +920,66 @@ class Divisions(commands.Cog):
         self.expire_invites.cancel()
         self.check_expirations.cancel()
 
+    @commands.Cog.listener()
+    async def on_member_update(self, before: discord.Member, after: discord.Member):
+        """Filet de sécurité global : dès qu'un membre gagne ou perd un rôle de
+        division (ou un rôle de grade vice/lieutenant), on planifie un refresh
+        des panels. Ça couvre TOUTES les sources de changement (invitation
+        acceptée, départ, expulsion, ban, ticket accepté, promotion, action
+        manuelle d'un admin sur les rôles...) sans avoir à multiplier les
+        appels explicites partout dans le code."""
+        if before.roles == after.roles:
+            return
+
+        before_ids = {r.id for r in before.roles}
+        after_ids = {r.id for r in after.roles}
+        changed_ids = before_ids ^ after_ids
+        if not changed_ids:
+            return
+
+        watched_ids = {VICE_ROLE_ID, LIEUTENANT_ROLE_ID}
+        relevant = False
+        for role in after.guild.roles:
+            if role.id in changed_ids and (role.id in watched_ids or DIVISION_ROLE_PATTERN.match(role.name.strip())):
+                relevant = True
+                break
+        if relevant:
+            schedule_panels_refresh(self.bot, after.guild)
+
+    @commands.Cog.listener()
+    async def on_member_remove(self, member: discord.Member):
+        """Si un membre d'une division quitte le serveur, son rôle disparaît
+        avec lui : on_member_update ne se déclenche pas dans ce cas précis,
+        donc on rafraîchit explicitement les panels ici aussi."""
+        if find_division_roles(member):
+            schedule_panels_refresh(self.bot, member.guild)
+
     @tasks.loop(seconds=30)
     async def expire_invites(self):
         now = int(discord.utils.utcnow().timestamp())
         for invite in await db.get_expired_pending_invites(now):
+            # On marque le statut en DB EN PREMIER : même si tout ce qui suit
+            # (fetch du salon/message Discord) échoue, l'invitation ne sera
+            # plus jamais reproposée ni considérée "pending" au prochain tour
+            # de boucle ou au prochain reboot. La donnée n'est jamais perdue.
             await db.update_invite_status(invite["id"], "expired")
+
             channel = self.bot.get_channel(invite["channel_id"])
             if channel is None:
-                continue
+                # Le cache interne peut ne pas encore contenir ce salon juste
+                # après un reboot/reconnexion : on retente un fetch réseau
+                # explicite avant d'abandonner, pour ne pas laisser l'embed
+                # public figé sur "en attente" alors que l'invitation a bien
+                # expiré côté données.
+                try:
+                    channel = await self.bot.fetch_channel(invite["channel_id"])
+                except discord.HTTPException:
+                    logger.warning(
+                        "Invitation %s expirée mais salon %s introuvable (probablement supprimé).",
+                        invite["id"], invite["channel_id"],
+                    )
+                    continue
+
             member = channel.guild.get_member(invite["invitee_id"])
             if member:
                 try:
@@ -902,8 +993,11 @@ class Divisions(commands.Cog):
                         embed=discord.Embed(description="⏰ Cette invitation a **expiré**.", color=discord.Color.greyple()),
                         view=None,
                     )
-                except discord.HTTPException:
+                except discord.NotFound:
+                    # Message déjà supprimé manuellement : rien à mettre à jour, ce n'est pas une erreur.
                     pass
+                except discord.HTTPException:
+                    logger.warning("Impossible de mettre à jour l'embed d'expiration pour l'invitation %s.", invite["id"])
 
     @expire_invites.before_loop
     async def before_expire_invites(self):

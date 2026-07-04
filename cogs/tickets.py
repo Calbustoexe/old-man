@@ -354,9 +354,22 @@ class Tickets(commands.Cog):
         for panel in await db.get_panel_messages():
             channel = guild.get_channel(panel["channel_id"])
             if channel is None:
-                # Le salon lui-même n'existe plus : impossible de recréer où que ce soit.
-                await db.remove_panel_message(panel["message_id"])
-                continue
+                # Le cache interne du bot peut ne pas encore contenir ce salon
+                # juste après un reboot/reconnexion, même s'il existe bel et
+                # bien sur Discord. On retente un fetch réseau explicite avant
+                # de conclure que le salon a été supprimé : sinon on risque de
+                # supprimer par erreur une entrée panel_messages parfaitement
+                # valide et de perdre la persistance du panel pour rien.
+                try:
+                    channel = await guild.fetch_channel(panel["channel_id"])
+                except discord.NotFound:
+                    # Là, le salon a vraiment été supprimé : impossible de recréer où que ce soit.
+                    await db.remove_panel_message(panel["message_id"])
+                    continue
+                except discord.HTTPException:
+                    # Erreur réseau/permission temporaire : on ne touche pas à la DB,
+                    # on retentera au prochain refresh.
+                    continue
             try:
                 msg = await channel.fetch_message(panel["message_id"])
             except discord.NotFound:
