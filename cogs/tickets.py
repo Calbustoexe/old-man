@@ -400,9 +400,50 @@ class Tickets(commands.Cog):
     @commands.command(name="panel")
     @commands.has_permissions(administrator=True)
     async def panel_cmd(self, ctx: commands.Context):
+        """d!panel — poste (ou met à jour) le panel de candidature.
+        Si un panel existe déjà dans CE salon, il est édité en place (l'embed
+        n'est jamais perdu/renvoyé). S'il existe dans un AUTRE salon, il est
+        déplacé : l'ancien est supprimé et un nouveau est posté ici. Il n'y a
+        donc jamais plusieurs panels actifs en même temps."""
         divisions = await db.get_all_divisions()
         embed = await build_panel_embed(ctx.guild, divisions)
         view = PanelView(divisions)
+
+        old_panels = await db.get_panel_messages()
+
+        # Cas 1 : un panel existe déjà dans ce salon -> on l'édite en place.
+        for old in old_panels:
+            if old["channel_id"] != ctx.channel.id:
+                continue
+            try:
+                old_msg = await ctx.channel.fetch_message(old["message_id"])
+            except discord.HTTPException:
+                # Le message a disparu : on nettoie l'entrée et on tombe au cas 2 (recréation).
+                await db.remove_panel_message(old["message_id"])
+                break
+            await old_msg.edit(embed=embed, view=view)
+            self.bot.add_view(view, message_id=old_msg.id)
+            await ctx.message.add_reaction("✅")
+            return
+
+        # Cas 2 : nettoyage des panels situés dans d'autres salons (on ne veut
+        # jamais plusieurs panels actifs en même temps sur le serveur), puis
+        # création du nouveau panel ici.
+        for old in old_panels:
+            old_channel = ctx.guild.get_channel(old["channel_id"])
+            if old_channel is None:
+                try:
+                    old_channel = await ctx.guild.fetch_channel(old["channel_id"])
+                except discord.HTTPException:
+                    old_channel = None
+            if old_channel is not None:
+                try:
+                    old_msg = await old_channel.fetch_message(old["message_id"])
+                    await old_msg.delete()
+                except discord.HTTPException:
+                    pass
+            await db.remove_panel_message(old["message_id"])
+
         msg = await ctx.send(embed=embed, view=view)
         self.bot.add_view(view, message_id=msg.id)
         await db.add_panel_message(ctx.channel.id, msg.id)
