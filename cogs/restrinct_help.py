@@ -1,20 +1,4 @@
-"""
-d!rh — Aide restreinte : n'affiche à chaque membre que les commandes qu'il a
-réellement le droit d'utiliser.
 
-Règles :
-- Les commandes réservées au propriétaire du bot (owner only) ne s'affichent
-  que pour lui.
-- Les commandes de modération (nécessitant une permission Discord précise,
-  ex: kick_members, ban_members, manage_messages...) ne s'affichent que si le
-  membre possède cette permission sur le serveur.
-- Les commandes ouvertes à tous (info publiques : snipe, userinfo, ping...)
-  s'affichent pour tout le monde.
-
-La liste est construite à la main (une seule source de vérité ci-dessous),
-mais reflète uniquement des commandes qui existent réellement dans le code —
-rien de fantôme.
-"""
 import discord
 from discord.ext import commands
 

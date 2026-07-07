@@ -7,7 +7,7 @@ from discord.ext import commands
 import utils
 
 OWNER_ID = utils.OWNER_ID
-PROTECTION_TIMEOUT = 180  # 3 minutes in seconds
+PROTECTION_TIMEOUT = 180  # 3 minutes in second
 
 _vocprotect = utils.load_vocprotect()
 _timers = {}

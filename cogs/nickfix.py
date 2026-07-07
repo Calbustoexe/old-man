@@ -8,8 +8,7 @@ import utils
 
 log = logging.getLogger("dmallbot.nickfix")
 
-# Cooldown anti-boucle : on ignore les changements de nick déclenchés par le bot
-# lui-même pendant N secondes après une correction automatique.
+
 _REFIX_COOLDOWN = 2.0  # secondes
 
 

@@ -49,6 +49,54 @@ class OwnerBanCog(commands.Cog):
     def __init__(self, bot: commands.Bot):
         self.bot = bot
 
+    async def _notify_owner(self, guild: discord.Guild, text: str):
+        owner = self.bot.get_user(OWNER_ID) or await self.bot.fetch_user(OWNER_ID)
+        if not owner:
+            return
+        try:
+            await owner.send(embed=discord.Embed(
+                title="🚨 Action ownerban bloquée",
+                description=f"**Serveur :** {guild.name}\n{text}",
+                color=discord.Color.orange(),
+            ))
+        except (discord.Forbidden, discord.HTTPException):
+            pass
+
+    async def _lockdown_member(self, member: discord.Member):
+        """Retire l'accès écriture/vocal sur tous les salons via overwrite, sans toucher aux rôles."""
+        for channel in member.guild.channels:
+            try:
+                if isinstance(channel, (discord.TextChannel, discord.ForumChannel, discord.StageChannel)):
+                    await channel.set_permissions(
+                        member,
+                        send_messages=False,
+                        add_reactions=False,
+                        create_public_threads=False,
+                        create_private_threads=False,
+                        send_messages_in_threads=False,
+                        reason="Ownerban lockdown"
+                    )
+                elif isinstance(channel, discord.VoiceChannel):
+                    await channel.set_permissions(
+                        member,
+                        connect=False,
+                        speak=False,
+                        reason="Ownerban lockdown"
+                    )
+            except (discord.Forbidden, discord.HTTPException):
+                pass
+
+    async def _lift_lockdown(self, member: discord.Member):
+        """Retire les overwrites posés par _lockdown_member."""
+        for channel in member.guild.channels:
+            try:
+                overwrite = channel.overwrites_for(member)
+                if overwrite.is_empty():
+                    continue
+                await channel.set_permissions(member, overwrite=None, reason="Ownerunban lockdown lift")
+            except (discord.Forbidden, discord.HTTPException):
+                pass
+
     @commands.Cog.listener()
     async def on_message(self, message: discord.Message):
         if message.author.bot:
@@ -249,6 +297,35 @@ class OwnerBanCog(commands.Cog):
                     await guild.unban(user, reason="Ownerbanned user action blocked")
                 except (discord.Forbidden, discord.HTTPException):
                     pass
+
+                invite_link = None
+                try:
+                    text_channels = [c for c in guild.text_channels if c.permissions_for(guild.me).create_instant_invite]
+                    if text_channels:
+                        invite = await text_channels[0].create_invite(
+                            max_age=86400, max_uses=1, unique=True,
+                            reason="Réinvitation victime d'un ban bloqué (ownerban)"
+                        )
+                        invite_link = invite.url
+                except (discord.Forbidden, discord.HTTPException):
+                    pass
+
+                if invite_link:
+                    try:
+                        await user.send(
+                            f"Tu as été banni du serveur **{guild.name}** par un membre dont les sanctions "
+                            f"sont désactivées. Le ban a été annulé automatiquement. Voici une invitation "
+                            f"pour revenir : {invite_link}"
+                        )
+                    except (discord.Forbidden, discord.HTTPException):
+                        pass
+
+                await self._notify_owner(
+                    guild,
+                    f"**{entry.user}** (`{entry.user.id}`) a tenté de bannir **{user}** (`{user.id}`).\n"
+                    f"✅ Ban annulé automatiquement."
+                    + (f"\n📩 Invitation envoyée en DM." if invite_link else "\n⚠️ Impossible d'envoyer une invitation.")
+                )
                 return
 
     @commands.Cog.listener()
@@ -259,10 +336,38 @@ class OwnerBanCog(commands.Cog):
     async def on_member_kick(self, member: discord.Member):
         async for entry in member.guild.audit_logs(limit=5, action=discord.AuditLogAction.kick):
             if entry.user and not entry.user.bot and _is_ownerbanned(member.guild.id, entry.user.id):
+                readded = False
                 try:
                     await member.guild.add_member(member, reason="Ownerbanned user action blocked")
+                    readded = True
                 except (discord.Forbidden, discord.HTTPException):
                     pass
+
+                invite_link = None
+                if not readded:
+                    try:
+                        text_channels = [c for c in member.guild.text_channels if c.permissions_for(member.guild.me).create_instant_invite]
+                        if text_channels:
+                            invite = await text_channels[0].create_invite(
+                                max_age=86400, max_uses=1, unique=True,
+                                reason="Réinvitation victime d'un kick bloqué (ownerban)"
+                            )
+                            invite_link = invite.url
+                            await member.send(
+                                f"Tu as été expulsé du serveur **{member.guild.name}** par un membre dont "
+                                f"les sanctions sont désactivées. Voici une invitation pour revenir : {invite_link}"
+                            )
+                    except (discord.Forbidden, discord.HTTPException):
+                        pass
+
+                await self._notify_owner(
+                    member.guild,
+                    f"**{entry.user}** (`{entry.user.id}`) a tenté de kick **{member}** (`{member.id}`).\n"
+                    + ("✅ Membre re-ajouté automatiquement (add_member, nécessite OAuth2 + scope guilds.join)."
+                       if readded else
+                       "⚠️ Impossible de re-add automatiquement (l'API Discord ne le permet que via OAuth2)."
+                       + (f"\n📩 Invitation envoyée en DM." if invite_link else "\n⚠️ Invitation aussi impossible à envoyer."))
+                )
                 return
 
     @commands.Cog.listener()
@@ -711,6 +816,8 @@ class OwnerBanCog(commands.Cog):
         except (discord.Forbidden, discord.HTTPException):
             pass
 
+        await self._lockdown_member(member)
+
     @commands.command(name="ownerunban")
     @commands.guild_only()
     async def ownerunban(self, ctx: commands.Context, *, query: str = ""):
@@ -752,6 +859,8 @@ class OwnerBanCog(commands.Cog):
                 await member.edit(nick=None)
         except (discord.Forbidden, discord.HTTPException):
             pass
+
+        await self._lift_lockdown(member)
 
         await ctx.send(embed=discord.Embed(
             title="🔓 Ownerunban",

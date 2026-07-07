@@ -13,7 +13,6 @@ edit_sniped: dict[int, dict] = {}
 lock_backup: dict[int, dict] = _tools_settings.get("lock_backup", {})
 french_only_channels: set[int] = set(_tools_settings.get("french_only_channels", []))
 
-
 def _save_tools_settings():
     utils.save_tools_settings({
         "french_only_channels": list(french_only_channels),

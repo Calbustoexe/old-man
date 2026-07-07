@@ -4,7 +4,6 @@ from datetime import timedelta, datetime, timezone
 
 import utils
 
-
 class ModCog(commands.Cog):
     def __init__(self, bot: commands.Bot):
         self.bot = bot

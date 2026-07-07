@@ -29,7 +29,6 @@ def _clean_expired():
     if changed:
         _save()
 
-
 class VocBanCog(commands.Cog):
     def __init__(self, bot: commands.Bot):
         self.bot = bot

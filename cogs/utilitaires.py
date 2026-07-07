@@ -54,7 +54,7 @@ class Utility(commands.Cog):
                 failed_count += 1
             except discord.HTTPException:
                 failed_count += 1
-            await asyncio.sleep(0.5)  # évite le rate limit sur les gros serveurs
+            await asyncio.sleep(0.5) 
 
         summary = success_embed(
             "Pseudos réinitialisés",
