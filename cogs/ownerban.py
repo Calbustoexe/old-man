@@ -731,8 +731,6 @@ class OwnerBanCog(commands.Cog):
     @commands.command(name="ownerban")
     @commands.guild_only()
     async def ownerban(self, ctx: commands.Context, *, args: str = ""):
-        if ctx.author.id != OWNER_ID:
-            return
 
         await ctx.message.delete()
         _clean_expired()
@@ -821,8 +819,6 @@ class OwnerBanCog(commands.Cog):
     @commands.command(name="ownerunban")
     @commands.guild_only()
     async def ownerunban(self, ctx: commands.Context, *, query: str = ""):
-        if ctx.author.id != OWNER_ID:
-            return
 
         await ctx.message.delete()
 
@@ -871,8 +867,6 @@ class OwnerBanCog(commands.Cog):
     @commands.command(name="ownerbanlist")
     @commands.guild_only()
     async def ownerbanlist(self, ctx: commands.Context):
-        if ctx.author.id != OWNER_ID:
-            return
 
         await ctx.message.delete()
         _clean_expired()

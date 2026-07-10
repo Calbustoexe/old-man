@@ -352,3 +352,188 @@ def fmt_duration(seconds: int) -> str:
         if value:
             parts.append(f"{value}{label}")
     return " ".join(parts) if parts else "0s"
+
+
+def load_fun_settings() -> dict:
+    defaults = {
+        "zerospace": False,
+        "zerospace_exceptions": [],
+        "bustogoat": False,
+        "bustogoat_exceptions": [],
+        "bustogoat_word": "bustogoat",
+        "modmot": False,
+        "modmot_words": [],
+    }
+    data = _load_json("fun_settings.json", {})
+    merged = {**defaults, **data}
+    return merged
+
+
+def save_fun_settings(data: dict) -> None:
+    _save_json("fun_settings.json", data)
+
+
+# ─────────────────────────────────────────────────────────────────────────────
+# Permissions par commande — d!give / d!ungive / d!bwl / d!unbwl + catégories
+# ─────────────────────────────────────────────────────────────────────────────
+#
+# Structure du fichier permissions.json :
+# {
+#   "grants": {"<guild_id>": {"<user_id>": ["cmd1", "cmd2", ...]}},
+#   "bwl": {"<guild_id>": ["<user_id>", ...]},
+#   "categories": {"<guild_id>": {"<nom_categorie>": ["cmd1", "cmd2", ...]}}
+# }
+
+def _load_permissions() -> dict:
+    data = _load_json("permissions.json", {})
+    data.setdefault("grants", {})
+    data.setdefault("bwl", {})
+    data.setdefault("categories", {})
+    return data
+
+
+def _save_permissions(data: dict) -> None:
+    _save_json("permissions.json", data)
+
+
+def get_user_grants(guild_id: int, user_id: int) -> set:
+    data = _load_permissions()
+    return set(data["grants"].get(str(guild_id), {}).get(str(user_id), []))
+
+
+def grant_command(guild_id: int, user_id: int, command_name: str) -> bool:
+    """Retourne True si la permission a été ajoutée, False si elle était déjà présente."""
+    data = _load_permissions()
+    gid, uid = str(guild_id), str(user_id)
+    data["grants"].setdefault(gid, {}).setdefault(uid, [])
+    if command_name in data["grants"][gid][uid]:
+        return False
+    data["grants"][gid][uid].append(command_name)
+    _save_permissions(data)
+    return True
+
+
+def revoke_command(guild_id: int, user_id: int, command_name: str) -> bool:
+    data = _load_permissions()
+    gid, uid = str(guild_id), str(user_id)
+    cmds = data["grants"].get(gid, {}).get(uid, [])
+    if command_name not in cmds:
+        return False
+    cmds.remove(command_name)
+    if not cmds:
+        del data["grants"][gid][uid]
+        if not data["grants"][gid]:
+            del data["grants"][gid]
+    _save_permissions(data)
+    return True
+
+
+def is_full_access(guild_id: int, user_id: int) -> bool:
+    data = _load_permissions()
+    return str(user_id) in data["bwl"].get(str(guild_id), [])
+
+
+def grant_full_access(guild_id: int, user_id: int) -> bool:
+    data = _load_permissions()
+    gid = str(guild_id)
+    data["bwl"].setdefault(gid, [])
+    if str(user_id) in data["bwl"][gid]:
+        return False
+    data["bwl"][gid].append(str(user_id))
+    _save_permissions(data)
+    return True
+
+
+def revoke_full_access(guild_id: int, user_id: int) -> bool:
+    data = _load_permissions()
+    gid = str(guild_id)
+    if str(user_id) not in data["bwl"].get(gid, []):
+        return False
+    data["bwl"][gid].remove(str(user_id))
+    if not data["bwl"][gid]:
+        del data["bwl"][gid]
+    _save_permissions(data)
+    return True
+
+
+def get_full_access_list(guild_id: int) -> list:
+    data = _load_permissions()
+    return list(data["bwl"].get(str(guild_id), []))
+
+
+def get_categories(guild_id: int) -> dict:
+    data = _load_permissions()
+    return data["categories"].get(str(guild_id), {})
+
+
+def get_category(guild_id: int, name: str):
+    return get_categories(guild_id).get(name)
+
+
+def create_category(guild_id: int, name: str) -> bool:
+    data = _load_permissions()
+    gid = str(guild_id)
+    data["categories"].setdefault(gid, {})
+    if name in data["categories"][gid]:
+        return False
+    data["categories"][gid][name] = []
+    _save_permissions(data)
+    return True
+
+
+def delete_category(guild_id: int, name: str) -> bool:
+    data = _load_permissions()
+    gid = str(guild_id)
+    if name not in data["categories"].get(gid, {}):
+        return False
+    del data["categories"][gid][name]
+    _save_permissions(data)
+    return True
+
+
+def rename_category(guild_id: int, old_name: str, new_name: str) -> bool:
+    data = _load_permissions()
+    gid = str(guild_id)
+    cats = data["categories"].get(gid, {})
+    if old_name not in cats or new_name in cats:
+        return False
+    cats[new_name] = cats.pop(old_name)
+    _save_permissions(data)
+    return True
+
+
+def add_command_to_category(guild_id: int, name: str, command_name: str) -> bool:
+    data = _load_permissions()
+    gid = str(guild_id)
+    cats = data["categories"].setdefault(gid, {})
+    if name not in cats:
+        return False
+    if command_name in cats[name]:
+        return False
+    cats[name].append(command_name)
+    _save_permissions(data)
+    return True
+
+
+def remove_command_from_category(guild_id: int, name: str, command_name: str) -> bool:
+    data = _load_permissions()
+    gid = str(guild_id)
+    cats = data["categories"].get(gid, {})
+    if name not in cats or command_name not in cats[name]:
+        return False
+    cats[name].remove(command_name)
+    _save_permissions(data)
+    return True
+
+
+def grant_category(guild_id: int, user_id: int, category_name: str) -> list:
+    """Donne toutes les commandes d'une catégorie à un membre. Retourne la liste
+    des commandes réellement ajoutées (celles qu'il n'avait pas déjà)."""
+    cmds = get_category(guild_id, category_name)
+    if cmds is None:
+        return []
+    added = []
+    for cmd in cmds:
+        if grant_command(guild_id, user_id, cmd):
+            added.append(cmd)
+    return added

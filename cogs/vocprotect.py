@@ -34,6 +34,62 @@ def _is_blacklisted(user_id: int, protection: dict) -> bool:
     return str(user_id) in protection.get("blacklist", [])
 
 
+def _find_target_protection(ctx):
+    """Determine sur quelle protection agir pour pvw/pvb/unpv.
+
+    Priorite :
+    1) Le salon vocal ou se trouve actuellement l'auteur, s'il est protege.
+    2) Sinon, la protection dont l'auteur est le protecteur (n'importe quel salon).
+    3) Si l'auteur est le proprietaire du bot, il peut aussi cibler la protection
+       la plus recente du serveur meme s'il ne l'a pas posee lui-meme et n'est
+       pas en vocal (gestion totale : l'owner peut tout gerer/retirer).
+
+    Retourne (key, protection) ou (None, None).
+    """
+    guild_id = ctx.guild.id
+
+    # 1) Salon vocal courant de l'auteur
+    if ctx.author.voice and ctx.author.voice.channel:
+        key = _get_protection_key(guild_id, ctx.author.voice.channel.id)
+        protection = _vocprotect.get(key)
+        if protection:
+            return key, protection
+
+    # 2) Protection posee par l'auteur, n'importe ou sur ce serveur
+    candidates = []
+    for key, protection in _vocprotect.items():
+        try:
+            key_guild_id, _channel_id = map(int, key.split("_"))
+        except ValueError:
+            continue
+        if key_guild_id != guild_id:
+            continue
+        if protection["protector_id"] == ctx.author.id:
+            candidates.append((protection.get("created_at", 0), key, protection))
+
+    if candidates:
+        candidates.sort(key=lambda c: c[0], reverse=True)
+        _, key, protection = candidates[0]
+        return key, protection
+
+    # 3) Owner : gestion totale, cible la protection la plus recente du serveur
+    if ctx.author.id == OWNER_ID:
+        all_on_guild = []
+        for key, protection in _vocprotect.items():
+            try:
+                key_guild_id, _channel_id = map(int, key.split("_"))
+            except ValueError:
+                continue
+            if key_guild_id == guild_id:
+                all_on_guild.append((protection.get("created_at", 0), key, protection))
+        if all_on_guild:
+            all_on_guild.sort(key=lambda c: c[0], reverse=True)
+            _, key, protection = all_on_guild[0]
+            return key, protection
+
+    return None, None
+
+
 class VocProtectCog(commands.Cog):
     def __init__(self, bot: commands.Bot):
         self.bot = bot
@@ -116,8 +172,6 @@ class VocProtectCog(commands.Cog):
     @commands.guild_only()
     async def protect_voc(self, ctx: commands.Context, *, args: str = ""):
         """Protect current voice channel. Usage: d!pv [@user1 @user2 ...]"""
-        if ctx.author.id != OWNER_ID:
-            return
         await ctx.message.delete()
 
         # Check if user is in a voice channel
@@ -147,7 +201,7 @@ class VocProtectCog(commands.Cog):
         key = _get_protection_key(ctx.guild.id, channel.id)
         if key in _vocprotect:
             old_protection = _vocprotect[key]
-            if old_protection["protector_id"] != ctx.author.id:
+            if old_protection["protector_id"] != ctx.author.id and ctx.author.id != OWNER_ID:
                 return await ctx.send(embed=utils.err(
                     "Ce salon est déjà protégé par quelqu'un d'autre.",
                     "❌ Déjà protégé"
@@ -181,8 +235,6 @@ class VocProtectCog(commands.Cog):
     @commands.guild_only()
     async def protect_voc_whitelist(self, ctx: commands.Context, *, args: str = ""):
         """Add users to the whitelist of the currently protected voice channel. Usage: d!pvw @user1 @user2 ..."""
-        if ctx.author.id != OWNER_ID:
-            return
         await ctx.message.delete()
 
         if not args:
@@ -191,17 +243,10 @@ class VocProtectCog(commands.Cog):
                 "❌ Arguments manquants"
             ), delete_after=10)
         
-        # Find which channel the user is protecting
-        user_protection = None
-        protection_key = None
-        for key, protection in _vocprotect.items():
-            if protection["protector_id"] == ctx.author.id:
-                guild_id, channel_id = map(int, key.split("_"))
-                if guild_id == ctx.guild.id:
-                    user_protection = protection
-                    protection_key = key
-                    break
-        
+        # Détermine le salon protégé ciblé (salon vocal courant en priorité,
+        # sinon la protection posée par l'auteur, sinon gestion totale pour l'owner)
+        protection_key, user_protection = _find_target_protection(ctx)
+
         if not user_protection:
             return await ctx.send(embed=utils.err(
                 "Tu ne protèges aucun salon vocal.",
@@ -239,8 +284,6 @@ class VocProtectCog(commands.Cog):
     @commands.guild_only()
     async def protect_voc_blacklist(self, ctx: commands.Context, *, args: str = ""):
         """Add users to the blacklist of the currently protected voice channel. Usage: d!pvb @user1 @user2 ..."""
-        if ctx.author.id != OWNER_ID:
-            return
         await ctx.message.delete()
 
         if not args:
@@ -249,17 +292,10 @@ class VocProtectCog(commands.Cog):
                 "❌ Arguments manquants"
             ), delete_after=10)
         
-        # Find which channel the user is protecting
-        user_protection = None
-        protection_key = None
-        for key, protection in _vocprotect.items():
-            if protection["protector_id"] == ctx.author.id:
-                guild_id, channel_id = map(int, key.split("_"))
-                if guild_id == ctx.guild.id:
-                    user_protection = protection
-                    protection_key = key
-                    break
-        
+        # Détermine le salon protégé ciblé (salon vocal courant en priorité,
+        # sinon la protection posée par l'auteur, sinon gestion totale pour l'owner)
+        protection_key, user_protection = _find_target_protection(ctx)
+
         if not user_protection:
             return await ctx.send(embed=utils.err(
                 "Tu ne protèges aucun salon vocal.",
@@ -319,25 +355,19 @@ class VocProtectCog(commands.Cog):
     @commands.guild_only()
     async def unprotect_voc(self, ctx: commands.Context, *, args: str = ""):
         """Remove protection from current voice channel. Usage: d!unpv"""
-        if ctx.author.id != OWNER_ID:
-            return
         await ctx.message.delete()
 
-        # Check if user is in a voice channel
-        if not ctx.author.voice or not ctx.author.voice.channel:
+        # Détermine le salon protégé ciblé (salon vocal courant en priorité,
+        # sinon la protection posée par l'auteur, sinon gestion totale pour l'owner)
+        key, protection = _find_target_protection(ctx)
+
+        if not protection:
             return await ctx.send(embed=utils.err(
-                "Tu dois être dans un salon vocal pour retirer sa protection.",
-                "❌ Pas dans un salon"
+                "Tu dois être dans le salon vocal protégé (ou en être le protecteur) pour retirer sa protection.",
+                "❌ Aucune protection trouvée"
             ), delete_after=10)
-        
-        channel = ctx.author.voice.channel
-        
-        key = _get_protection_key(ctx.guild.id, channel.id)
-        if key not in _vocprotect:
-            return await ctx.send(embed=utils.info(
-                f"Ce salon n'est pas protégé.",
-                "ℹ️ Pas protégé"
-            ), delete_after=10)
+
+        channel_id = int(key.split("_")[1])
 
         del _vocprotect[key]
         _save()
@@ -348,7 +378,7 @@ class VocProtectCog(commands.Cog):
         
         await ctx.send(embed=discord.Embed(
             title="🔓 Protection retirée",
-            description=f"**<#{channel.id}>** n'est plus protégé.",
+            description=f"**<#{channel_id}>** n'est plus protégé.",
             color=discord.Color.green(),
         ).set_footer(text=f"Par {ctx.author.display_name}"), delete_after=15)
 

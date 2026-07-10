@@ -22,7 +22,6 @@ class ModCog(commands.Cog):
     # ── KICK ─────────────────────────────────────────────────────────────────
 
     @commands.command(name="kick")
-    @commands.has_permissions(kick_members=True)
     @commands.guild_only()
     async def kick(self, ctx: commands.Context, *, query: str):
         await ctx.message.delete()
@@ -80,7 +79,6 @@ class ModCog(commands.Cog):
     # ── BAN ──────────────────────────────────────────────────────────────────
 
     @commands.command(name="ban")
-    @commands.has_permissions(ban_members=True)
     @commands.guild_only()
     async def ban(self, ctx: commands.Context, *, query: str):
         await ctx.message.delete()
@@ -138,7 +136,6 @@ class ModCog(commands.Cog):
     # ── UNBAN ─────────────────────────────────────────────────────────────────
 
     @commands.command(name="unban")
-    @commands.has_permissions(ban_members=True)
     @commands.guild_only()
     async def unban(self, ctx: commands.Context, *, query: str):
         await ctx.message.delete()
@@ -180,7 +177,6 @@ class ModCog(commands.Cog):
     # ── MUTE (timeout) ────────────────────────────────────────────────────────
 
     @commands.command(name="mute")
-    @commands.has_permissions(moderate_members=True)
     @commands.guild_only()
     async def mute(self, ctx: commands.Context, *, query: str):
         await ctx.message.delete()
@@ -253,7 +249,6 @@ class ModCog(commands.Cog):
     # ── UNMUTE ────────────────────────────────────────────────────────────────
 
     @commands.command(name="unmute")
-    @commands.has_permissions(moderate_members=True)
     @commands.guild_only()
     async def unmute(self, ctx: commands.Context, *, query: str):
         await ctx.message.delete()
@@ -291,7 +286,6 @@ class ModCog(commands.Cog):
     # ── WARN ──────────────────────────────────────────────────────────────────
 
     @commands.command(name="warn")
-    @commands.has_permissions(manage_messages=True)
     @commands.guild_only()
     async def warn(self, ctx: commands.Context, *, query: str):
         await ctx.message.delete()
@@ -345,7 +339,6 @@ class ModCog(commands.Cog):
     # ── WARNS ─────────────────────────────────────────────────────────────────
 
     @commands.command(name="warns")
-    @commands.has_permissions(manage_messages=True)
     @commands.guild_only()
     async def warns(self, ctx: commands.Context, *, query: str):
         member = await utils.find_member(ctx, query)
@@ -393,7 +386,6 @@ class ModCog(commands.Cog):
     # ── WARNLIST ──────────────────────────────────────────────────────────────
 
     @commands.command(name="warnlist")
-    @commands.has_permissions(manage_messages=True)
     @commands.guild_only()
     async def warnlist(self, ctx: commands.Context):
         all_warned = utils.get_all_warned(ctx.guild.id)
@@ -429,7 +421,6 @@ class ModCog(commands.Cog):
     # ── DELWARN ───────────────────────────────────────────────────────────────
 
     @commands.command(name="delwarn")
-    @commands.has_permissions(manage_messages=True)
     @commands.guild_only()
     async def delwarn(self, ctx: commands.Context, *, query: str):
         parts = query.rsplit(None, 1)
@@ -465,7 +456,6 @@ class ModCog(commands.Cog):
     # ── CLEARWARNS ────────────────────────────────────────────────────────────
 
     @commands.command(name="clearwarns")
-    @commands.has_permissions(manage_messages=True)
     @commands.guild_only()
     async def clearwarns(self, ctx: commands.Context, *, query: str):
         member = await utils.find_member(ctx, query)

@@ -241,7 +241,6 @@ class ToolsCog(commands.Cog):
     # ── CLEAR ─────────────────────────────────────────────────────────────────
 
     @commands.command(name="clear", aliases=["purge"])
-    @commands.has_permissions(manage_messages=True)
     @commands.guild_only()
     async def clear(self, ctx: commands.Context, amount: int = 10):
         await ctx.message.delete()
@@ -272,7 +271,6 @@ class ToolsCog(commands.Cog):
     # ── LOCK ──────────────────────────────────────────────────────────────────
 
     @commands.command(name="lock")
-    @commands.has_permissions(manage_channels=True)
     @commands.guild_only()
     async def lock(self, ctx: commands.Context, *, reason: str = None):
         await ctx.message.delete()
@@ -318,7 +316,6 @@ class ToolsCog(commands.Cog):
     # ── UNLOCK ────────────────────────────────────────────────────────────────
 
     @commands.command(name="unlock")
-    @commands.has_permissions(manage_channels=True)
     @commands.guild_only()
     async def unlock(self, ctx: commands.Context, *, reason: str = None):
         await ctx.message.delete()
@@ -361,7 +358,6 @@ class ToolsCog(commands.Cog):
     # ── SLOWMODE ──────────────────────────────────────────────────────────────
 
     @commands.command(name="slowmode", aliases=["sm"])
-    @commands.has_permissions(manage_channels=True)
     @commands.guild_only()
     async def slowmode(self, ctx: commands.Context, seconds: int = 0):
         await ctx.message.delete()
@@ -401,7 +397,6 @@ class ToolsCog(commands.Cog):
     # ── FRENCH ONLY ───────────────────────────────────────────────────────────
 
     @commands.command(name="fron")
-    @commands.has_permissions(manage_channels=True)
     @commands.guild_only()
     async def fron(self, ctx: commands.Context):
         await ctx.message.delete()
@@ -419,7 +414,6 @@ class ToolsCog(commands.Cog):
         ).set_footer(text=f"Par {ctx.author.display_name}"))
 
     @commands.command(name="froff")
-    @commands.has_permissions(manage_channels=True)
     @commands.guild_only()
     async def froff(self, ctx: commands.Context):
         await ctx.message.delete()

@@ -22,7 +22,12 @@ intents.message_content = True
 intents.guilds = True
 intents.members = True
 
-bot = commands.Bot(command_prefix=PREFIX, intents=intents, description="Urahara dcp - RP Bleach Bot")
+bot = commands.Bot(
+    command_prefix=PREFIX,
+    intents=intents,
+    description="Urahara dcp - RP Bleach Bot",
+    help_command=None,  # d!help par défaut désactivé : il cassait tout, remplacé par d!rh
+)
 
 
 _ready_once = False
@@ -50,11 +55,8 @@ async def on_ready():
         print(f"Failed to sync slash commands: {e}")
 
 
-@bot.command()
-async def ping(ctx):
-    """Répond avec la latence du bot."""
-    await ctx.send(f"Hoy! {round(bot.latency * 1000)} ms")
-
+# NOTE: la commande "ping" a été retirée d'ici (doublon) — elle vit désormais
+# uniquement dans cogs/fun.py (embed avec couleur selon la latence).
 
 @bot.command(name="sync")
 @commands.is_owner()

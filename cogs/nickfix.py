@@ -88,8 +88,6 @@ class NickFixCog(commands.Cog):
           d!sfixeon <membre>           → fixe sur son pseudo actuel
           d!sfixeon <membre> <pseudo>  → fixe sur le pseudo précisé
         """
-        if ctx.author.id != utils.OWNER_ID:
-            return
         await ctx.message.delete()
 
         if not query:
@@ -166,8 +164,6 @@ class NickFixCog(commands.Cog):
 
         Usage : d!sunfixe <membre>
         """
-        if ctx.author.id != utils.OWNER_ID:
-            return
         await ctx.message.delete()
 
         if not query:
@@ -222,8 +218,6 @@ class NickFixCog(commands.Cog):
     @commands.guild_only()
     async def sfixelist(self, ctx: commands.Context):
         """Affiche la liste de tous les membres avec un pseudo fixé sur ce serveur."""
-        if ctx.author.id != utils.OWNER_ID:
-            return
         fixed = utils.get_all_fixed(ctx.guild.id)
         if not fixed:
             return await ctx.send(embed=discord.Embed(

@@ -29,7 +29,6 @@ class Utility(commands.Cog):
         self.bot = bot
 
     @commands.command(name="nikreset")
-    @commands.has_permissions(manage_nicknames=True)
     async def nikreset(self, ctx: commands.Context):
         """d!nikreset — retire le pseudo personnalisé de tous les membres du serveur."""
         guild = ctx.guild

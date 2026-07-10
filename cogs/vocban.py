@@ -65,8 +65,6 @@ class VocBanCog(commands.Cog):
     @commands.command(name="banvoc")
     @commands.guild_only()
     async def banvoc(self, ctx: commands.Context, *, args: str = ""):
-        if ctx.author.id != OWNER_ID:
-            return
 
         await ctx.message.delete()
         _clean_expired()
@@ -139,8 +137,6 @@ class VocBanCog(commands.Cog):
     @commands.command(name="unbanvoc")
     @commands.guild_only()
     async def unbanvoc(self, ctx: commands.Context, *, query: str = ""):
-        if ctx.author.id != OWNER_ID:
-            return
 
         await ctx.message.delete()
 

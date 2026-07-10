@@ -958,7 +958,22 @@ class GiveawayCog(commands.Cog, name="Giveaway"):
             return None
 
         guild = self.bot.get_guild(gw["guild_id"])
-        channel = guild.get_channel(gw["channel_id"]) if guild else None
+        if guild is None:
+            # Le cache du serveur n'est pas encore disponible (ex: juste après un
+            # redémarrage/reconnexion). On NE clôture PAS maintenant : on retente
+            # au prochain passage de check_loop (15s plus tard) pour éviter de
+            # figer le giveaway en "ended" sans gagnants et sans jamais éditer
+            # le message public (c'était la cause du bug "le gw ne se termine
+            # pas correctement à la fin du temps").
+            print(f"[Giveaway] Serveur {gw['guild_id']} introuvable pour le giveaway {gw_id}, nouvelle tentative au prochain cycle.")
+            return None
+
+        channel = guild.get_channel(gw["channel_id"])
+        if channel is None:
+            try:
+                channel = await guild.fetch_channel(gw["channel_id"])
+            except (discord.NotFound, discord.Forbidden, discord.HTTPException):
+                channel = None
 
         # clôturer les sessions vocales en cours pour figer le temps vocal
         if gw["conditions"].get("min_voice_time"):
@@ -967,9 +982,10 @@ class GiveawayCog(commands.Cog, name="Giveaway"):
                 gw["voice_time"][uid] = gw["voice_time"].get(uid, 0) + (now - start)
             gw["voice_sessions"] = {}
 
-        winners = self.pick_winners(gw, guild) if guild else []
+        winners = self.pick_winners(gw, guild)
         gw["winners"] = winners
         gw["status"] = "ended"
+        gw["forced_winner"] = None
         self.save_data()
 
         # Annuler toute mise à jour "temps réel" encore en attente pour ce giveaway,
@@ -1009,7 +1025,6 @@ class GiveawayCog(commands.Cog, name="Giveaway"):
     # ------------------------------------------------------------------
 
     @commands.command(name="giveaway", aliases=["gw"])
-    @commands.has_permissions(manage_guild=True)
     @commands.guild_only()
     async def giveaway(self, ctx: commands.Context):
         """Ouvre le panneau de configuration d'un nouveau giveaway."""
@@ -1018,7 +1033,6 @@ class GiveawayCog(commands.Cog, name="Giveaway"):
         panel.message = msg
 
     @commands.command(name="gwcancel", aliases=["gwc"])
-    @commands.has_permissions(manage_guild=True)
     @commands.guild_only()
     async def gwcancel(self, ctx: commands.Context, gw_id: int):
         """Annule un giveaway actif sans désigner de gagnant."""
@@ -1053,7 +1067,6 @@ class GiveawayCog(commands.Cog, name="Giveaway"):
         await ctx.send(f"✅ Le giveaway **{gw['name']}** (ID `{gw_id}`) a été annulé.")
 
     @commands.command(name="gwend")
-    @commands.has_permissions(manage_guild=True)
     @commands.guild_only()
     async def gwend(self, ctx: commands.Context, gw_id: int):
         """Termine immédiatement un giveaway actif."""
@@ -1070,7 +1083,6 @@ class GiveawayCog(commands.Cog, name="Giveaway"):
             await ctx.send(f"✅ Le giveaway **{result['name']}** (ID `{gw_id}`) a été terminé manuellement.")
 
     @commands.command(name="gwreroll", aliases=["gwr"])
-    @commands.has_permissions(manage_guild=True)
     @commands.guild_only()
     async def gwreroll(self, ctx: commands.Context, gw_id: int, nombre: int = 1):
         """Retire au sort de(s) nouveau(x) gagnant(s) pour un giveaway déjà terminé."""
@@ -1108,14 +1120,19 @@ class GiveawayCog(commands.Cog, name="Giveaway"):
         mentions = ", ".join(f"<@{uid}>" for uid in new_winners)
         await ctx.send(f"🎉 Nouveau tirage pour **{gw['name']}** : félicitations {mentions} ! Tu remportes **{gw['reward']}** !")
 
-    @commands.command(name="gwforcewin", aliases=["gwfw"])
-    @commands.has_permissions(manage_guild=True)
+    @commands.command(name="gwforcewin", aliases=["gwfw"], hidden=True)
     @commands.guild_only()
     async def gwforcewin(self, ctx: commands.Context, membre: discord.Member, gw_id: Optional[int] = None):
         """Force discrètement un membre à remporter un giveaway actif.
 
-        Personne d'autre que l'exécuteur n'est informé de cette action.
+        Commande strictement réservée au propriétaire du bot, invisible pour
+        tout le monde (jamais listée dans l'aide, jamais accordable via
+        d!give ou d!bwl, même à quelqu'un en accès total).
         """
+        import utils as _utils
+        if ctx.author.id != _utils.OWNER_ID:
+            return
+
         # Supprimer le message de commande au plus vite, en silence
         try:
             await ctx.message.delete()
