@@ -7,24 +7,36 @@ _fun_settings = utils.load_fun_settings()
 
 _zerospace: bool = _fun_settings["zerospace"]
 _zerospace_exceptions: set[int] = set(_fun_settings["zerospace_exceptions"])
+_zerospace_guild_id = _fun_settings["zerospace_guild_id"]
+_zerospace_channel_id = _fun_settings["zerospace_channel_id"]
 
 _bustogoat: bool = _fun_settings["bustogoat"]
 _bustogoat_exceptions: set[int] = set(_fun_settings["bustogoat_exceptions"])
 _bustogoat_word: str = _fun_settings["bustogoat_word"]
+_bustogoat_guild_id = _fun_settings["bustogoat_guild_id"]
+_bustogoat_channel_id = _fun_settings["bustogoat_channel_id"]
 
 _modmot: bool = _fun_settings["modmot"]
 _modmot_words: set[str] = set(_fun_settings["modmot_words"])
+_modmot_guild_id = _fun_settings["modmot_guild_id"]
+_modmot_channel_id = _fun_settings["modmot_channel_id"]
 
 
 def _save_fun_settings():
     utils.save_fun_settings({
         "zerospace": _zerospace,
         "zerospace_exceptions": list(_zerospace_exceptions),
+        "zerospace_guild_id": _zerospace_guild_id,
+        "zerospace_channel_id": _zerospace_channel_id,
         "bustogoat": _bustogoat,
         "bustogoat_exceptions": list(_bustogoat_exceptions),
         "bustogoat_word": _bustogoat_word,
+        "bustogoat_guild_id": _bustogoat_guild_id,
+        "bustogoat_channel_id": _bustogoat_channel_id,
         "modmot": _modmot,
         "modmot_words": list(_modmot_words),
+        "modmot_guild_id": _modmot_guild_id,
+        "modmot_channel_id": _modmot_channel_id,
     })
 
 
@@ -67,13 +79,15 @@ class FunCog(commands.Cog):
 
     @commands.command(name="0spaceon", aliases=["0son"])
     async def zerospace_on(self, ctx: commands.Context):
-        global _zerospace
+        global _zerospace, _zerospace_guild_id, _zerospace_channel_id
         _zerospace = True
+        _zerospace_guild_id = ctx.guild.id if ctx.guild else None
+        _zerospace_channel_id = ctx.channel.id
         _save_fun_settings()
         await ctx.message.delete()
         await ctx.send(embed=discord.Embed(
             title="🚫 Zero-Space activé",
-            description="Tous les messages contenant des espaces seront supprimés.",
+            description=f"Tous les messages contenant des espaces seront supprimés dans {ctx.channel.mention}.",
             color=discord.Color.red(),
         ).set_footer(text=f"Par {ctx.author.display_name}"))
 
@@ -115,13 +129,15 @@ class FunCog(commands.Cog):
 
     @commands.command(name="bgon")
     async def bg_on(self, ctx: commands.Context):
-        global _bustogoat
+        global _bustogoat, _bustogoat_guild_id, _bustogoat_channel_id
         _bustogoat = True
+        _bustogoat_guild_id = ctx.guild.id if ctx.guild else None
+        _bustogoat_channel_id = ctx.channel.id
         _save_fun_settings()
         await ctx.message.delete()
         await ctx.send(embed=discord.Embed(
             title="🐐 Bustogoat — Activé",
-            description=f"Chaque message doit se terminer par **`{_bustogoat_word}`** ou il sera supprimé.",
+            description=f"Chaque message doit se terminer par **`{_bustogoat_word}`** ou il sera supprimé dans {ctx.channel.mention}.",
             color=discord.Color.red(),
         ).set_footer(text=f"Par {ctx.author.display_name}"))
 
@@ -179,11 +195,13 @@ class FunCog(commands.Cog):
 
     @commands.command(name="mmon")
     async def mm_on(self, ctx: commands.Context):
-        global _modmot
+        global _modmot, _modmot_guild_id, _modmot_channel_id
         _modmot = True
+        _modmot_guild_id = ctx.guild.id if ctx.guild else None
+        _modmot_channel_id = ctx.channel.id
         _save_fun_settings()
         await ctx.message.delete()
-        desc = f"**{len(_modmot_words)}** mot(s) filtré(s)." if _modmot_words else f"Aucun mot filtré pour l'instant — ajoutes-en avec `{ctx.prefix}mmadd`."
+        desc = f"**{len(_modmot_words)}** mot(s) filtré(s) dans {ctx.channel.mention}." if _modmot_words else f"Aucun mot filtré pour l'instant — ajoutes-en avec `{ctx.prefix}mmadd`."
         await ctx.send(embed=discord.Embed(
             title="🚫 ModMot activé",
             description=desc,
@@ -249,9 +267,29 @@ class FunCog(commands.Cog):
         if message.author.bot or not message.content:
             return
 
-        content = message.content
+        # Ne jamais filtrer les commandes du bot : sinon impossible de
+        # désactiver, d'ignorer un membre, etc. une fois un filtre activé.
+        prefixes = self.bot.command_prefix
+        if isinstance(prefixes, str):
+            prefixes = (prefixes,)
+        elif callable(prefixes):
+            try:
+                prefixes = tuple(prefixes(self.bot, message))
+            except Exception:
+                prefixes = ()
+        if any(message.content.startswith(p) for p in prefixes):
+            return
 
-        if _zerospace and message.author.id not in _zerospace_exceptions and " " in content:
+        content = message.content
+        guild_id = message.guild.id if message.guild else None
+        channel_id = message.channel.id
+
+        zerospace_here = (
+            _zerospace
+            and guild_id == _zerospace_guild_id
+            and channel_id == _zerospace_channel_id
+        )
+        if zerospace_here and message.author.id not in _zerospace_exceptions and " " in content:
             try:
                 await message.delete()
                 await message.channel.send(
@@ -262,7 +300,12 @@ class FunCog(commands.Cog):
                 pass
             return
 
-        if _bustogoat and message.author.id not in _bustogoat_exceptions:
+        bustogoat_here = (
+            _bustogoat
+            and guild_id == _bustogoat_guild_id
+            and channel_id == _bustogoat_channel_id
+        )
+        if bustogoat_here and message.author.id not in _bustogoat_exceptions:
             if content.strip() and not content.strip().lower().endswith(_bustogoat_word.lower()):
                 try:
                     await message.delete()
@@ -274,7 +317,12 @@ class FunCog(commands.Cog):
                     pass
                 return
 
-        if _modmot:
+        modmot_here = (
+            _modmot
+            and guild_id == _modmot_guild_id
+            and channel_id == _modmot_channel_id
+        )
+        if modmot_here:
             lower = content.lower()
             if any(word in lower for word in _modmot_words):
                 try:

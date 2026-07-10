@@ -358,11 +358,17 @@ def load_fun_settings() -> dict:
     defaults = {
         "zerospace": False,
         "zerospace_exceptions": [],
+        "zerospace_guild_id": None,
+        "zerospace_channel_id": None,
         "bustogoat": False,
         "bustogoat_exceptions": [],
         "bustogoat_word": "bustogoat",
+        "bustogoat_guild_id": None,
+        "bustogoat_channel_id": None,
         "modmot": False,
         "modmot_words": [],
+        "modmot_guild_id": None,
+        "modmot_channel_id": None,
     }
     data = _load_json("fun_settings.json", {})
     merged = {**defaults, **data}
