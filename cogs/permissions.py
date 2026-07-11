@@ -482,16 +482,19 @@ class PermissionsCog(commands.Cog):
             return await ctx.send(embed=utils.err(f"Membre `{query}` introuvable."), delete_after=10)
 
         name = cmd_or_cat.lower()
-        # d'abord on regarde si c'est une catégorie custom
-        category = utils.get_category(ctx.guild.id, cmd_or_cat)
-        if category is not None:
-            added = utils.grant_category(ctx.guild.id, member.id, cmd_or_cat)
+        # d'abord on regarde si c'est une catégorie custom (recherche insensible
+        # à la casse : avant, "d!give vip @x" échouait silencieusement si la
+        # catégorie s'appelait "VIP", tombant à tort dans "commande introuvable")
+        categories = utils.get_categories(ctx.guild.id)
+        matched_category = next((c for c in categories if c.lower() == name), None)
+        if matched_category is not None:
+            added = utils.grant_category(ctx.guild.id, member.id, matched_category)
             if not added:
                 return await ctx.send(embed=utils.info(
-                    f"{member.mention} avait déjà toutes les commandes de la catégorie `{cmd_or_cat}`."
+                    f"{member.mention} avait déjà toutes les commandes de la catégorie `{matched_category}`."
                 ), delete_after=10)
             return await ctx.send(embed=utils.ok(
-                f"{member.mention} a reçu **{len(added)}** commande(s) de la catégorie `{cmd_or_cat}` : "
+                f"{member.mention} a reçu **{len(added)}** commande(s) de la catégorie `{matched_category}` : "
                 + ", ".join(f"`{c}`" for c in added)
             ), delete_after=15)
 
@@ -651,9 +654,9 @@ class PermissionsCog(commands.Cog):
         if not member:
             return await ctx.send(embed=utils.err(f"Membre `{query}` introuvable."), delete_after=10)
 
-        added = utils.grant_category(ctx.guild.id, member.id, name)
         if utils.get_category(ctx.guild.id, name) is None:
             return await ctx.send(embed=utils.err(f"Catégorie `{name}` introuvable."), delete_after=10)
+        added = utils.grant_category(ctx.guild.id, member.id, name)
         if not added:
             return await ctx.send(embed=utils.info(f"{member.mention} avait déjà toutes les commandes de `{name}`."), delete_after=10)
         await ctx.send(embed=utils.ok(

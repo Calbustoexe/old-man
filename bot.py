@@ -102,7 +102,18 @@ async def main():
     # Initialiser les profils de membres
     await member_db.ensure_member_profile_table()
     print("Member profiles table initialized.")
-    
+
+    # Précharger depuis Turso tout ce que utils.py sert en synchrone aux cogs
+    # (permissions/catégories, fun_settings, vocban, vocprotect, ownerban,
+    # tools_settings, nickfix, warns). SANS ÇA, les cogs repartiraient à vide
+    # à chaque redémarrage : c'était la cause du bug "cpanel perd ses
+    # catégories au reboot" (et pareil pour warns, vocban, etc.), le disque
+    # Railway étant éphémère. DOIT être appelé avant load_cogs() puisque
+    # certains cogs lisent leurs réglages au moment même de l'import du module.
+    import utils
+    await utils.bootstrap_persistence()
+    print("Persistence cache (Turso) preloaded.")
+
     await load_cogs()
     if not TOKEN:
         print("TOKEN not found. Please create a .env file with TOKEN=your_token_here")

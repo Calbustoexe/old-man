@@ -11,6 +11,8 @@ import discord
 from discord.ext import commands, tasks
 
 DATA_FILE = os.path.join(os.path.dirname(os.path.abspath(__file__)), "giveaways_data.json")
+_KV_NAMESPACE = "yamamotobot"
+_KV_KEY = "giveaways_data.json"
 
 UNIT_SECONDS = {"s": 1, "m": 60, "h": 3600, "j": 86400}
 UNIT_LABEL = {"s": "seconde(s)", "m": "minute(s)", "h": "heure(s)", "j": "jour(s)"}
@@ -602,11 +604,25 @@ class GiveawayView(discord.ui.View):
 class GiveawayCog(commands.Cog, name="Giveaway"):
     def __init__(self, bot: commands.Bot):
         self.bot = bot
-        self.data = self.load_data()
+        # Valeur temporaire tant que cog_load() (async) n'a pas encore rechargé
+        # depuis Turso. __init__ est synchrone : impossible d'attendre Turso ici.
+        self.data = self._load_local_fallback()
         self.invites_cache: dict[int, dict[str, int]] = {}
         # Gestion de la mise à jour "temps réel" de l'embed (avec anti-rate-limit)
         self._update_tasks: dict[int, asyncio.Task] = {}
         self._dirty: set[int] = set()
+
+    async def cog_load(self):
+        # Rechargement depuis Turso, seule source de vérité durable.
+        # AVANT : self.data venait uniquement de giveaways_data.json, un
+        # fichier sur le disque éphémère de Railway. Ce fichier disparaissait
+        # à chaque redéploiement/redémarrage, effaçant tous les giveaways
+        # (actifs comme terminés). Turso survit aux redémarrages.
+        from data import kv_store
+        await kv_store.init_kv_table()
+        stored = await kv_store.kv_get(_KV_NAMESPACE, _KV_KEY, None)
+        if stored is not None:
+            self.data = stored
         self.check_loop.start()
 
     def cog_unload(self):
@@ -619,7 +635,10 @@ class GiveawayCog(commands.Cog, name="Giveaway"):
     # Persistance
     # ------------------------------------------------------------------
 
-    def load_data(self) -> dict:
+    def _load_local_fallback(self) -> dict:
+        """Filet de sécurité synchrone pour __init__ uniquement (avant que
+        cog_load() ait pu recharger depuis Turso). Ne doit jamais être la
+        source de vérité en production."""
         if os.path.exists(DATA_FILE):
             try:
                 with open(DATA_FILE, "r", encoding="utf-8") as f:
@@ -629,8 +648,30 @@ class GiveawayCog(commands.Cog, name="Giveaway"):
         return {"_counter": 0, "giveaways": {}}
 
     def save_data(self):
-        with open(DATA_FILE, "w", encoding="utf-8") as f:
-            json.dump(self.data, f, ensure_ascii=False, indent=2)
+        # Écriture atomique locale (best-effort, survit le temps du process)
+        # + sauvegarde persistante vers Turso en tâche de fond. Turso est la
+        # seule des deux à survivre à un redéploiement Railway.
+        tmp_file = DATA_FILE + ".tmp"
+        try:
+            with open(tmp_file, "w", encoding="utf-8") as f:
+                json.dump(self.data, f, ensure_ascii=False, indent=2)
+            os.replace(tmp_file, DATA_FILE)
+        except OSError:
+            pass
+
+        from data import kv_store
+
+        async def _persist():
+            try:
+                await kv_store.kv_set(_KV_NAMESPACE, _KV_KEY, self.data)
+            except Exception as exc:
+                print(f"[Giveaway] Échec de sauvegarde Turso : {exc}")
+
+        try:
+            asyncio.get_running_loop()
+            asyncio.create_task(_persist())
+        except RuntimeError:
+            pass
 
     # ------------------------------------------------------------------
     # Cycle de vie / listeners
@@ -735,7 +776,17 @@ class GiveawayCog(commands.Cog, name="Giveaway"):
     @tasks.loop(seconds=15)
     async def check_loop(self):
         now = time.time()
-        to_end = [gw for gw in self.data["giveaways"].values() if gw["status"] == "active" and gw["end_time"] <= now]
+        # IMPORTANT : on itère sur une copie (list(...)) et non directement sur
+        # self.data["giveaways"].values(). Un giveaway peut être créé (nouvelle
+        # clé insérée dans le dict) pendant que cette boucle tourne (ex: un
+        # membre lance `d!giveaway` en même temps), ce qui provoquait un
+        # RuntimeError("dictionary changed size during iteration"). Cette
+        # exception, non rattrapée, faisait mourir silencieusement la tâche
+        # @tasks.loop pour toujours : plus aucun giveaway ne se terminait
+        # jamais après ça, sans aucune erreur visible. C'était la cause
+        # principale du bug.
+        snapshot = list(self.data["giveaways"].values())
+        to_end = [gw for gw in snapshot if gw["status"] == "active" and gw["end_time"] <= now]
         for gw in to_end:
             try:
                 await self.end_giveaway(gw["id"])
@@ -745,6 +796,17 @@ class GiveawayCog(commands.Cog, name="Giveaway"):
     @check_loop.before_loop
     async def before_check_loop(self):
         await self.bot.wait_until_ready()
+
+    @check_loop.error
+    async def check_loop_error(self, error: BaseException):
+        # Filet de sécurité ultime : si malgré tout une exception inattendue
+        # s'échappe de check_loop, discord.ext.tasks arrête la boucle pour de
+        # bon et ne la relance jamais tout seul. On logue et on la relance
+        # nous-même pour ne plus jamais rester bloqué avec des giveaways qui
+        # ne se terminent plus.
+        print(f"[Giveaway] check_loop a levé une exception non gérée, relance automatique : {error}")
+        if not self.check_loop.is_running():
+            self.check_loop.start()
 
     # ------------------------------------------------------------------
     # Logique métier

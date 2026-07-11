@@ -11,6 +11,7 @@ Contient :
 """
 from __future__ import annotations
 
+import asyncio
 import json
 import pathlib
 import re
@@ -60,25 +61,111 @@ async def silent_check_failure(ctx: commands.Context, error: Exception) -> bool:
 _STORAGE_DIR = pathlib.Path(__file__).parent / "data" / "storage"
 _STORAGE_DIR.mkdir(parents=True, exist_ok=True)
 
+# ─────────────────────────────────────────────────────────────────────────────
+# Backend de persistance : cache mémoire + Turso (remplace l'ancien JSON local).
+#
+# Contexte : tout _load_json/_save_json ci-dessous était auparavant lu/écrit
+# directement sur disque (data/storage/*.json). Sur Railway, ce disque est
+# éphémère : chaque redéploiement (ou simple crash-restart) efface ces
+# fichiers, ce qui faisait perdre catégories (`d!cpanel`), accès accordés,
+# warns, réglages fun, vocban, vocprotect, ownerban, etc. au reboot.
+#
+# Le reste du bot (divisions, profils...) est déjà persistant via Turso
+# (data/db_conn.py). On branche donc ce même Turso ici, via une table
+# clé-valeur générique (data/kv_store.py), MAIS sans transformer les dizaines
+# de fonctions synchrones de ce fichier en async (ça aurait forcé à changer
+# des dizaines d'appels dans tous les cogs, trop risqué à livrer d'un coup).
+#
+# À la place : un cache mémoire tient lieu de "vérité" pour les lectures
+# (toujours synchrones, donc zéro changement d'API), et chaque écriture
+# programme une sauvegarde Turso en tâche de fond via asyncio.create_task.
+# `bootstrap_persistence()` DOIT être appelé une fois, en async, avant que
+# les cogs ne soient chargés (voir bot.py) pour précharger ce cache depuis
+# Turso — sinon on repartirait à vide à chaque démarrage.
+# ─────────────────────────────────────────────────────────────────────────────
+
+_KV_NAMESPACE = "yamamotobot"
+_KV_CACHE: dict[str, object] = {}
+_KV_FILENAMES = (
+    "permissions.json",
+    "fun_settings.json",
+    "vocban.json",
+    "vocprotect.json",
+    "ownerban.json",
+    "tools_settings.json",
+    "nickfix.json",
+    "warns.json",
+)
+
+
+async def bootstrap_persistence() -> None:
+    """À appeler une fois au démarrage (avant le chargement des cogs) pour
+    précharger depuis Turso tout ce que _load_json va servir ensuite en
+    synchrone. Idempotent : peut être rappelée sans risque (ex: reconnexion)."""
+    from data import kv_store
+
+    await kv_store.init_kv_table()
+    for filename in _KV_FILENAMES:
+        _KV_CACHE[filename] = await kv_store.kv_get(_KV_NAMESPACE, filename, None)
+
+
+def _schedule_kv_save(filename: str, data) -> None:
+    """Programme l'écriture Turso en tâche de fond, sans bloquer l'appelant
+    synchrone. Si aucune boucle asyncio n'est active (ex: tests unitaires
+    hors bot), l'écriture est simplement ignorée : le cache mémoire reste à
+    jour pour la durée du process, ce qui suffit en local/tests."""
+    from data import kv_store
+
+    async def _save():
+        try:
+            await kv_store.kv_set(_KV_NAMESPACE, filename, data)
+        except Exception as exc:  # ne jamais faire planter l'appelant pour un souci réseau Turso
+            print(f"[Persistence] Échec de sauvegarde Turso pour '{filename}': {exc}")
+
+    try:
+        asyncio.get_running_loop()
+        asyncio.create_task(_save())
+    except RuntimeError:
+        pass
+
 
 def _load_json(filename: str, default):
+    """Lit depuis le cache mémoire préchargé par bootstrap_persistence().
+    Fallback sur l'ancien fichier JSON local uniquement si le cache n'a
+    jamais été initialisé pour cette clé (ex: bootstrap pas encore appelé,
+    ou tout premier lancement sans donnée Turso ni fichier local)."""
+    if filename in _KV_CACHE and _KV_CACHE[filename] is not None:
+        return _KV_CACHE[filename]
+
     path = _STORAGE_DIR / filename
-    if not path.exists():
-        return default
-    try:
-        with path.open("r", encoding="utf-8") as f:
-            return json.load(f)
-    except (json.JSONDecodeError, OSError):
-        return default
+    if path.exists():
+        try:
+            with path.open("r", encoding="utf-8") as f:
+                data = json.load(f)
+            _KV_CACHE[filename] = data
+            return data
+        except (json.JSONDecodeError, OSError):
+            pass
+
+    _KV_CACHE[filename] = default
+    return default
 
 
 def _save_json(filename: str, data) -> None:
+    """Met à jour le cache mémoire immédiatement (lectures synchrones toujours
+    cohérentes) et programme l'écriture persistante vers Turso en tâche de
+    fond. Écrit aussi en local en secours (best-effort, ignoré si échoue)."""
+    _KV_CACHE[filename] = data
+    _schedule_kv_save(filename, data)
+
     path = _STORAGE_DIR / filename
     tmp_path = path.with_suffix(f".tmp-{uuid.uuid4().hex}")
     try:
         with tmp_path.open("w", encoding="utf-8") as f:
             json.dump(data, f, ensure_ascii=False, indent=2)
         tmp_path.replace(path)
+    except OSError:
+        pass
     finally:
         if tmp_path.exists():
             tmp_path.unlink(missing_ok=True)
