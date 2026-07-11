@@ -523,7 +523,13 @@ class ToolsCog(commands.Cog):
             f"[{fmt.upper()}]({member.display_avatar.replace(format=fmt, size=1024).url})"
             for fmt in formats
         )
-        embed.set_footer(text=links)
+        # IMPORTANT : le footer d'un embed Discord n'affiche que du texte brut,
+        # il n'interprète jamais le Markdown. Les liens [PNG](url) y étaient
+        # donc affichés tels quels (crochets/parenthèses visibles, non
+        # cliquables) au lieu d'être rendus comme de vrais liens. Un field
+        # (comme la description) interprète correctement le Markdown.
+        embed.add_field(name="Télécharger", value=links, inline=False)
+        embed.set_footer(text=f"Demandé par {ctx.author.display_name}")
         await ctx.send(embed=embed)
 
 
