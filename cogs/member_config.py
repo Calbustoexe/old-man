@@ -14,6 +14,7 @@ from discord.ext import commands
 
 from data import member_profiles as mdb
 import utils
+from cogs.division_config import resolve_image_url
 
 logger = logging.getLogger("urahara.member_config")
 
@@ -282,14 +283,18 @@ async def handle_session_message(message: discord.Message, session: dict):
             url = await utils.persist_image(message.guild, message.attachments[0])
             valid = url is not None
         elif raw.startswith(("http://", "https://")):
-            url = await utils.persist_image_from_url(message.guild, raw)
-            valid = True
+            resolved = await resolve_image_url(raw)
+            if resolved is None:
+                url, valid = None, False
+            else:
+                url = await utils.persist_image_from_url(message.guild, resolved)
+                valid = True
         else:
             url, valid = None, False
 
         await safe_delete(message)
         if not valid:
-            await safe_notice(message.channel, "Lien ou image invalide (ou erreur d'enregistrement, réessaie).")
+            await safe_notice(message.channel, "Lien non reconnu comme image/GIF valide (essaie un lien direct .gif/.png/.mp4, ou envoie le fichier en pièce jointe).")
             return
 
         if step == "pfp":

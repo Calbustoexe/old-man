@@ -36,9 +36,38 @@ URL_PATTERN = re.compile(r"^https?://\S+$")
 HEX_PATTERN = re.compile(r"^#?[0-9A-Fa-f]{6}$")
 CUSTOM_EMOJI_ID_PATTERN = re.compile(r"^<a?:\w+:(\d+)>$")
 IMAGE_EXTENSIONS = (".png", ".jpg", ".jpeg", ".gif", ".webp", ".apng")
-DIRECT_IMAGE_HOSTS = ("cdn.discordapp.com", "media.discordapp.net", "media.tenor.com", "i.giphy.com", "media.giphy.com")
-OG_IMAGE_PATTERN = re.compile(r'property=["\']og:image(?::secure_url)?["\']\s+content=["\']([^"\']+)["\']', re.I)
-OG_IMAGE_PATTERN_ALT = re.compile(r'content=["\']([^"\']+)["\']\s+property=["\']og:image["\']', re.I)
+VIDEO_EXTENSIONS = (".mp4", ".webm", ".mov")
+DIRECT_IMAGE_HOSTS = (
+    "cdn.discordapp.com", "media.discordapp.net",
+    "media.tenor.com", "c.tenor.com", "media1.tenor.com", "media2.tenor.com", "media3.tenor.com",
+    "i.giphy.com", "media.giphy.com", "media0.giphy.com", "media1.giphy.com", "media2.giphy.com", "media3.giphy.com", "media4.giphy.com",
+    "static2.klipy.com", "static.klipy.com",
+)
+# Ordre de préférence : GIF d'abord (compatible embed statique + animé), puis vidéo (mp4) en repli.
+OG_META_PATTERNS = [
+    re.compile(r'property=["\']og:image:secure_url["\']\s+content=["\']([^"\']+)["\']', re.I),
+    re.compile(r'content=["\']([^"\']+)["\']\s+property=["\']og:image:secure_url["\']', re.I),
+    re.compile(r'property=["\']og:image["\']\s+content=["\']([^"\']+)["\']', re.I),
+    re.compile(r'content=["\']([^"\']+)["\']\s+property=["\']og:image["\']', re.I),
+    re.compile(r'name=["\']twitter:image["\']\s+content=["\']([^"\']+)["\']', re.I),
+    re.compile(r'content=["\']([^"\']+)["\']\s+name=["\']twitter:image["\']', re.I),
+    re.compile(r'property=["\']og:video:secure_url["\']\s+content=["\']([^"\']+)["\']', re.I),
+    re.compile(r'content=["\']([^"\']+)["\']\s+property=["\']og:video:secure_url["\']', re.I),
+]
+# Headers "navigateur" à essayer dans l'ordre — beaucoup de sites de partage de GIF
+# (Tenor, Giphy, Klipy...) bloquent les user-agents génériques/inconnus (403) mais
+# autorisent explicitement le crawler Discord (nécessaire à leurs propres previews
+# d'embed) ainsi qu'un vrai navigateur. On essaie donc plusieurs profils avant
+# d'abandonner, plutôt que de stocker silencieusement l'URL de la page (ce qui
+# cassait l'affichage des GIF sur les embeds).
+SCRAPE_HEADER_PROFILES = [
+    {"User-Agent": "Mozilla/5.0 (compatible; Discordbot/2.0; +https://discordapp.com)"},
+    {
+        "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/124.0.0.0 Safari/537.36",
+        "Accept": "text/html,application/xhtml+xml,application/xml;q=0.9,image/webp,*/*;q=0.8",
+        "Accept-Language": "fr-FR,fr;q=0.9,en;q=0.8",
+    },
+]
 
 WIZARD_STEPS = ["name", "description", "min_age", "reglement", "pp", "banner", "preview"]
 FIELD_TYPE = {"name": "text", "description": "text", "min_age": "int", "reglement": "text", "pp": "image", "banner": "image"}
@@ -136,27 +165,68 @@ async def fetch_bytes(url: str) -> bytes | None:
 
 
 async def fetch_text(url: str) -> str | None:
-    try:
-        headers = {"User-Agent": "Mozilla/5.0 (compatible; UraharaBot/1.0)"}
-        async with aiohttp.ClientSession() as http:
-            async with http.get(url, timeout=aiohttp.ClientTimeout(total=8), headers=headers) as resp:
-                if resp.status != 200:
-                    return None
-                return await resp.text()
-    except aiohttp.ClientError:
-        return None
+    """Récupère le HTML d'une page en essayant plusieurs profils d'en-têtes.
+
+    Certains sites de partage de GIF (Tenor, Giphy, Klipy...) renvoient un 403
+    aux user-agents génériques/inconnus mais autorisent le crawler Discord ou
+    un vrai navigateur. On essaie chaque profil jusqu'à en trouver un qui passe.
+    """
+    for headers in SCRAPE_HEADER_PROFILES:
+        try:
+            async with aiohttp.ClientSession() as http:
+                async with http.get(url, timeout=aiohttp.ClientTimeout(total=8), headers=headers, allow_redirects=True) as resp:
+                    if resp.status == 200:
+                        return await resp.text()
+        except aiohttp.ClientError:
+            continue
+    return None
 
 
-async def resolve_image_url(raw: str) -> str:
-    """Résout un lien de page (giphy.com/gifs/..., tenor.com/view/...) vers l'URL directe du média via og:image."""
+async def url_is_direct_media(url: str) -> bool:
+    """Vérifie que l'URL pointe bien vers une image/vidéo/gif réelle (via Content-Type),
+    et pas vers une page HTML. Utilisé pour éviter de stocker par erreur un lien de
+    page web comme si c'était l'image elle-même (cause du bug d'affichage cassé)."""
+    lower = url.split("?")[0].lower()
+    if lower.endswith(IMAGE_EXTENSIONS) or lower.endswith(VIDEO_EXTENSIONS):
+        return True
+    if any(host in url.lower() for host in DIRECT_IMAGE_HOSTS):
+        return True
+    for headers in SCRAPE_HEADER_PROFILES:
+        try:
+            async with aiohttp.ClientSession() as http:
+                async with http.head(url, timeout=aiohttp.ClientTimeout(total=6), headers=headers, allow_redirects=True) as resp:
+                    content_type = resp.headers.get("Content-Type", "")
+                    if resp.status == 200 and (content_type.startswith("image/") or content_type.startswith("video/")):
+                        return True
+        except aiohttp.ClientError:
+            continue
+    return False
+
+
+async def resolve_image_url(raw: str) -> str | None:
+    """Résout un lien de page (giphy.com/gifs/..., tenor.com/view/..., klipy.com/gifs/...)
+    vers l'URL directe du média via les balises og:image / og:video / twitter:image.
+
+    Renvoie None si la résolution échoue ou si le résultat ne pointe pas vers un
+    fichier image/vidéo réel — mieux vaut refuser proprement que stocker un lien
+    de page qui ne s'affichera jamais dans l'embed.
+    """
     lower = raw.split("?")[0].lower()
-    if lower.endswith(IMAGE_EXTENSIONS) or any(host in raw.lower() for host in DIRECT_IMAGE_HOSTS):
+    if lower.endswith(IMAGE_EXTENSIONS) or lower.endswith(VIDEO_EXTENSIONS) or any(host in raw.lower() for host in DIRECT_IMAGE_HOSTS):
         return raw
+
     html = await fetch_text(raw)
     if html is None:
-        return raw
-    match = OG_IMAGE_PATTERN.search(html) or OG_IMAGE_PATTERN_ALT.search(html)
-    return match.group(1) if match else raw
+        return None
+
+    for pattern in OG_META_PATTERNS:
+        match = pattern.search(html)
+        if match:
+            candidate = match.group(1).replace("&amp;", "&")
+            if await url_is_direct_media(candidate):
+                return candidate
+
+    return None
 
 
 async def safe_delete(message: discord.Message):
@@ -471,13 +541,16 @@ async def handle_wizard_message(message: discord.Message, session):
                 valid = False
         elif URL_PATTERN.match(raw):
             resolved = await resolve_image_url(raw)
-            value = await utils.persist_image_from_url(message.guild, resolved)
+            if resolved is None:
+                valid = False
+            else:
+                value = await utils.persist_image_from_url(message.guild, resolved)
         else:
             valid = False
 
     await safe_delete(message)
     if not valid:
-        await safe_notice(message.channel, "Réponse invalide pour cette étape (ou erreur d'enregistrement de l'image, réessaie).")
+        await safe_notice(message.channel, "Lien non reconnu comme image/GIF valide (essaie un lien direct .gif/.png/.mp4, ou envoie le fichier en pièce jointe).")
         return
 
     data = pdb.session_data(session)
@@ -548,13 +621,16 @@ async def handle_edit_message(message: discord.Message, session):
                 valid = False
         elif URL_PATTERN.match(raw):
             resolved = await resolve_image_url(raw)
-            value = await utils.persist_image_from_url(message.guild, resolved)
+            if resolved is None:
+                valid = False
+            else:
+                value = await utils.persist_image_from_url(message.guild, resolved)
         else:
             valid = False
 
     await safe_delete(message)
     if not valid:
-        await safe_notice(message.channel, "Réponse invalide pour ce champ (ou erreur d'enregistrement de l'image, réessaie).")
+        await safe_notice(message.channel, "Lien non reconnu comme image/GIF valide (essaie un lien direct .gif/.png/.mp4, ou envoie le fichier en pièce jointe).")
         return
 
     column = FIELD_TO_COLUMN[step]
