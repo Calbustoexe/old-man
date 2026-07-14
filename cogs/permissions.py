@@ -48,7 +48,7 @@ OWNER_ID = utils.OWNER_ID
 #   s'adapte simplement au contenu visible par chacun).
 # - d!gwforcewin / d!gwfw : commande invisible strictement owner-only, gérée
 #   à part (jamais accessible via give/bwl, jamais listée dans rh).
-RP_STAFF_COMMANDS = {"skick", "sban", "sreset", "sunban", "smute", "sunmute", "accepter", "panel"}
+RP_STAFF_COMMANDS = {"skick", "sban", "sreset", "sunban", "smute", "sunmute", "accepter", "panel", "tagall"}
 HELP_COMMANDS = {"rh", "aide", "h"}
 OWNER_LOCKED_COMMANDS = {"gwforcewin", "gwfw"}
 

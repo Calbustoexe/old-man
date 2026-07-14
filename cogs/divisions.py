@@ -13,6 +13,7 @@ Cog de gestion des divisions du Gotei (RP Bleach).
 /division-debloquer       : débloque une division précédemment bloquée.
 /division-dissoudre       : dissout entièrement une division (Administrateur).
 /sanction-retirer         : lève toutes les sanctions/timeouts de division d'un membre (Administrateur).
+d!tagall                 : réapplique le tag『ɗivN』à tous les membres d'une division qui l'ont perdu.
 """
 import os
 import re
@@ -937,6 +938,15 @@ class ConfirmDissolveView(discord.ui.View):
 class Divisions(commands.Cog):
     def __init__(self, bot: commands.Bot):
         self.bot = bot
+        # {(guild_id, user_id): timestamp} — dernière correction auto de tag
+        # effectuée par le bot lui-même, pour ne pas re-déclencher en boucle
+        # notre propre on_member_update (member.edit(nick=...) ci-dessous émet
+        # exactement le même event que si le membre s'était renommé).
+        self._tag_fix_timestamps: dict[tuple[int, int], float] = {}
+        # Évite de relancer le scan complet à chaque reconnexion on_ready
+        # (Railway peut redéclencher on_ready après une coupure réseau sans
+        # que ce soit un vrai redémarrage du process).
+        self._startup_tag_scan_done = False
 
     async def cog_load(self):
         self.expire_invites.start()
@@ -949,6 +959,111 @@ class Divisions(commands.Cog):
         self.expire_invites.cancel()
         self.check_expirations.cancel()
 
+    def _mark_tag_fix(self, guild_id: int, user_id: int):
+        self._tag_fix_timestamps[(guild_id, user_id)] = discord.utils.utcnow().timestamp()
+
+    def _tag_fix_cooldown_active(self, guild_id: int, user_id: int) -> bool:
+        key = (guild_id, user_id)
+        last = self._tag_fix_timestamps.get(key, 0.0)
+        return (discord.utils.utcnow().timestamp() - last) < 2.0
+
+    async def _reapply_tag_if_needed(self, member: discord.Member) -> str:
+        """Si le membre porte un rôle de division, s'assure que le tag『ɗivN』
+        est toujours présent en tête de son pseudo actuel. Ne touche à rien
+        d'autre : le reste du pseudo choisi par le membre est conservé tel quel.
+        Pensé pour être appelé à chaque renommage, autant de fois que
+        nécessaire — le tag doit être perpétuellement présent, sans que le
+        membre puisse s'en débarrasser en se renommant.
+
+        Retourne un statut pour permettre aux appelants (scan de démarrage,
+        commande d!tagall) de faire un rapport :
+          "fixed"     : le tag manquait, il vient d'être réappliqué.
+          "ok"        : rien à faire, le tag était déjà là.
+          "no_division": le membre n'a pas de rôle de division.
+          "forbidden" : permission Discord manquante (rôle du bot trop bas...).
+          "error"     : autre erreur HTTP.
+        """
+        roles = find_division_roles(member)
+        if not roles:
+            return "no_division"
+        number = extract_division_number(roles[0])
+        if number is None:
+            return "no_division"
+
+        expected_tag = division_tag(number)
+        current_name = member.display_name
+
+        # Le tag est déjà là, en tête : rien à faire.
+        if current_name.startswith(expected_tag):
+            return "ok"
+
+        base = TAG_PATTERN.sub("", current_name).strip()
+        new_nick = f"{expected_tag} {base}".strip() if base else expected_tag
+        if len(new_nick) > 32:
+            overflow = len(new_nick) - 32
+            base = base[: max(0, len(base) - overflow)].rstrip()
+            new_nick = f"{expected_tag} {base}".strip() if base else expected_tag
+
+        if new_nick == member.nick:
+            return "ok"
+
+        try:
+            self._mark_tag_fix(member.guild.id, member.id)
+            await member.edit(nick=new_nick, reason="Réapplication automatique du tag de division")
+            return "fixed"
+        except discord.Forbidden:
+            logger.warning(
+                "[DivisionTag] Impossible de réappliquer le tag de division pour %s (%d) — "
+                "permission manquante (rôle du bot trop bas ou membre non modifiable).",
+                member, member.id,
+            )
+            return "forbidden"
+        except discord.HTTPException as exc:
+            logger.error("[DivisionTag] Erreur HTTP en réappliquant le tag pour %s (%d) : %s", member, member.id, exc)
+            return "error"
+
+    async def _scan_and_fix_all_tags(self, guild: discord.Guild) -> dict[str, int]:
+        """Parcourt tous les membres du serveur et réapplique le tag de division
+        à quiconque en a un rôle mais pas le tag en tête de pseudo. Utilisé au
+        démarrage du bot (rattrapage automatique après une mise à jour) et par
+        la commande d!tagall (rattrapage manuel à la demande)."""
+        counters = {"fixed": 0, "ok": 0, "no_division": 0, "forbidden": 0, "error": 0}
+        for member in guild.members:
+            if member.bot:
+                continue
+            status = await self._reapply_tag_if_needed(member)
+            counters[status] = counters.get(status, 0) + 1
+            if status == "fixed":
+                # Petite pause pour rester loin des rate limits Discord sur
+                # les gros serveurs (member.edit est un appel API à part entière).
+                await asyncio.sleep(0.3)
+        return counters
+
+    @commands.Cog.listener()
+    async def on_ready(self):
+        """Rattrapage automatique au démarrage : après un déploiement/commit,
+        on scanne tous les serveurs pour redonner le tag『ɗivN』à quiconque a
+        une division mais dont le pseudo a été changé pendant que le bot était
+        hors ligne (ou avant que ce système n'existe). Une seule fois par
+        session — on_ready peut se redéclencher après une reconnexion réseau
+        sans que ce soit un vrai redémarrage."""
+        if self._startup_tag_scan_done:
+            return
+        self._startup_tag_scan_done = True
+
+        for guild in self.bot.guilds:
+            try:
+                counters = await self._scan_and_fix_all_tags(guild)
+            except Exception as exc:
+                logger.error("[DivisionTag] Scan de démarrage échoué pour '%s' : %s", guild.name, exc)
+                continue
+            if counters["fixed"] or counters["forbidden"] or counters["error"]:
+                logger.info(
+                    "[DivisionTag] Scan de démarrage sur '%s' : %d tag(s) réappliqué(s), "
+                    "%d déjà en ordre, %d ignoré(s) (permission), %d erreur(s).",
+                    guild.name, counters["fixed"], counters["ok"], counters["forbidden"], counters["error"],
+                )
+
     @commands.Cog.listener()
     async def on_member_update(self, before: discord.Member, after: discord.Member):
         """Filet de sécurité global : dès qu'un membre gagne ou perd un rôle de
@@ -956,7 +1071,16 @@ class Divisions(commands.Cog):
         des panels. Ça couvre TOUTES les sources de changement (invitation
         acceptée, départ, expulsion, ban, ticket accepté, promotion, action
         manuelle d'un admin sur les rôles...) sans avoir à multiplier les
-        appels explicites partout dans le code."""
+        appels explicites partout dans le code.
+
+        On surveille aussi les changements de pseudo : un membre en division
+        qui se renomme et fait disparaître son tag『ɗivN』se le voit réappliqué
+        immédiatement devant son nouveau pseudo, sans rien changer d'autre.
+        """
+        if before.nick != after.nick:
+            if not self._tag_fix_cooldown_active(after.guild.id, after.id):
+                await self._reapply_tag_if_needed(after)
+
         if before.roles == after.roles:
             return
 
@@ -1720,6 +1844,35 @@ class Divisions(commands.Cog):
     # -----------------------------------------------------------------
     # Commandes staff (préfixe, permission "Gérer les messages" minimum)
     # -----------------------------------------------------------------
+
+    @commands.command(name="tagall")
+    @commands.has_permissions(manage_messages=True)
+    async def tagall(self, ctx: commands.Context):
+        """d!tagall — réapplique le tag『ɗivN』à tous les membres d'une division
+        qui ne l'ont plus dans leur pseudo (rattrapage manuel, ex : après une
+        mise à jour, ou pour vérifier ponctuellement l'état du serveur)."""
+        notice = await ctx.send(embed=discord.Embed(
+            description=f"🔄 Vérification des pseudos en cours sur **{ctx.guild.member_count}** membres...",
+            color=discord.Color.blurple(),
+        ))
+
+        counters = await self._scan_and_fix_all_tags(ctx.guild)
+
+        embed = discord.Embed(title="🏷️ Rattrapage des tags de division", color=discord.Color.green())
+        embed.add_field(name="✅ Tag réappliqué", value=str(counters["fixed"]), inline=True)
+        embed.add_field(name="✔️ Déjà en ordre", value=str(counters["ok"]), inline=True)
+        embed.add_field(name="🚫 Sans division", value=str(counters["no_division"]), inline=True)
+        if counters["forbidden"]:
+            embed.add_field(
+                name="⚠️ Ignoré (permission)",
+                value=f"{counters['forbidden']} membre(s) — rôle du bot trop bas ou non modifiable.",
+                inline=False,
+            )
+        if counters["error"]:
+            embed.add_field(name="❌ Erreur", value=str(counters["error"]), inline=False)
+        embed.set_footer(text=f"Lancé par {ctx.author.display_name}")
+
+        await notice.edit(embed=embed)
 
     @commands.command(name="skick")
     @commands.has_permissions(manage_messages=True)
