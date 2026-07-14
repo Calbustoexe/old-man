@@ -32,9 +32,38 @@ from data import division_profiles as pdb
 
 logger = logging.getLogger("urahara.divisions")
 
-CAPTAIN_ROLE_ID = int(os.getenv("ROLE_CAPTAIN_ID"))
-VICE_ROLE_ID = int(os.getenv("ROLE_VICE_ID"))
-LIEUTENANT_ROLE_ID = int(os.getenv("ROLE_LIEUTENANT_ID"))
+def _load_role_id(env_name: str) -> int:
+    """Lit un ID de rôle depuis l'environnement sans jamais planter l'import du cog.
+
+    Avant : int(os.getenv("ROLE_X_ID")) levait une exception si la variable était
+    absente/mal définie sur Railway, ce qui faisait planter le chargement de tout
+    ce module -> divisions.py ne se chargeait plus -> division_config.py (qui
+    l'importe via "from cogs import divisions as div_mod") plantait en cascade.
+    Résultat observé : "le rôle capitaine n'existe pas" / division non reconnue,
+    alors que le vrai souci était un cog jamais chargé, pas un rôle manquant.
+    """
+    raw = os.getenv(env_name)
+    if raw is None or not raw.strip():
+        logger.error(
+            "Variable d'environnement %s absente ou vide : le rôle correspondant "
+            "ne sera pas détecté tant qu'elle n'est pas définie sur Railway.",
+            env_name,
+        )
+        return 0
+    try:
+        return int(raw.strip())
+    except ValueError:
+        logger.error(
+            "Variable d'environnement %s invalide (%r) : elle doit contenir "
+            "uniquement l'ID numérique du rôle.",
+            env_name, raw,
+        )
+        return 0
+
+
+CAPTAIN_ROLE_ID = _load_role_id("ROLE_CAPTAIN_ID")
+VICE_ROLE_ID = _load_role_id("ROLE_VICE_ID")
+LIEUTENANT_ROLE_ID = _load_role_id("ROLE_LIEUTENANT_ID")
 
 MAX_DIVISION_MEMBERS = 15
 LEAVE_REJOIN_COOLDOWN = 3 * 86400
