@@ -95,7 +95,36 @@ async def persist_image(guild: discord.Guild, attachment) -> Optional[str]:
         return None
 
 
-async def persist_image_from_url(guild: discord.Guild, url: str, filename: str = "image.gif") -> Optional[str]:
+_EXT_FROM_CONTENT_TYPE = {
+    "image/gif": ".gif",
+    "image/png": ".png",
+    "image/jpeg": ".jpg",
+    "image/webp": ".webp",
+    "video/mp4": ".mp4",
+    "video/webm": ".webm",
+    "video/quicktime": ".mov",
+}
+_KNOWN_MEDIA_EXTENSIONS = (".gif", ".png", ".jpg", ".jpeg", ".webp", ".apng", ".mp4", ".webm", ".mov")
+
+
+def _guess_media_filename(url: str, content_type: str) -> str:
+    """Déduit un nom de fichier avec la bonne extension à partir de l'URL et/ou
+    du Content-Type renvoyé par le serveur. Crucial pour Discord : un GIF/vidéo
+    re-uploadé sous une mauvaise extension (ex: un .mp4 nommé "image.gif") est
+    rendu par Discord comme une image STATIQUE, même si le contenu est animé.
+    """
+    path = url.split("?")[0].split("#")[0]
+    for ext in _KNOWN_MEDIA_EXTENSIONS:
+        if path.lower().endswith(ext):
+            return f"media{ext}"
+    main_type = content_type.split(";")[0].strip().lower()
+    ext = _EXT_FROM_CONTENT_TYPE.get(main_type)
+    if ext:
+        return f"media{ext}"
+    return "media.png"
+
+
+async def persist_image_from_url(guild: discord.Guild, url: str) -> Optional[str]:
     """Variante de persist_image pour les URL externes déjà résolues (GIF Tenor/Giphy,
     lien direct, etc.). Télécharge le média puis le re-upload dans le salon de
     stockage permanent pour obtenir un lien qui n'expire pas. Renvoie l'URL
@@ -109,9 +138,12 @@ async def persist_image_from_url(guild: discord.Guild, url: str, filename: str =
             async with http.get(url, timeout=aiohttp.ClientTimeout(total=10)) as resp:
                 if resp.status != 200:
                     return url
+                content_type = resp.headers.get("Content-Type", "")
                 data = await resp.read()
     except Exception:
         return url
+
+    filename = _guess_media_filename(url, content_type)
 
     channel = await _get_or_create_storage_channel(guild)
     if channel is None:
