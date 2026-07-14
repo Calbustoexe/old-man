@@ -27,6 +27,7 @@ from data import database as db
 from data import division_profiles as pdb
 from data import division_profile as profile_mod
 from cogs import divisions as div_mod
+import utils
 
 logger = logging.getLogger("urahara.division_config")
 
@@ -465,15 +466,18 @@ async def handle_wizard_message(message: discord.Message, session):
         value = int(raw) if valid else None
     elif kind == "image":
         if message.attachments:
-            value = message.attachments[0].url
+            value = await utils.persist_image(message.guild, message.attachments[0])
+            if value is None:
+                valid = False
         elif URL_PATTERN.match(raw):
-            value = await resolve_image_url(raw)
+            resolved = await resolve_image_url(raw)
+            value = await utils.persist_image_from_url(message.guild, resolved)
         else:
             valid = False
 
     await safe_delete(message)
     if not valid:
-        await safe_notice(message.channel, "Réponse invalide pour cette étape.")
+        await safe_notice(message.channel, "Réponse invalide pour cette étape (ou erreur d'enregistrement de l'image, réessaie).")
         return
 
     data = pdb.session_data(session)
@@ -539,15 +543,18 @@ async def handle_edit_message(message: discord.Message, session):
         value = int(raw) if valid else None
     elif kind == "image":
         if message.attachments:
-            value = message.attachments[0].url
+            value = await utils.persist_image(message.guild, message.attachments[0])
+            if value is None:
+                valid = False
         elif URL_PATTERN.match(raw):
-            value = await resolve_image_url(raw)
+            resolved = await resolve_image_url(raw)
+            value = await utils.persist_image_from_url(message.guild, resolved)
         else:
             valid = False
 
     await safe_delete(message)
     if not valid:
-        await safe_notice(message.channel, "Réponse invalide pour ce champ.")
+        await safe_notice(message.channel, "Réponse invalide pour ce champ (ou erreur d'enregistrement de l'image, réessaie).")
         return
 
     column = FIELD_TO_COLUMN[step]

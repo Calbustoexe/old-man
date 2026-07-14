@@ -13,6 +13,7 @@ from discord import app_commands, ui
 from discord.ext import commands
 
 from data import member_profiles as mdb
+import utils
 
 logger = logging.getLogger("urahara.member_config")
 
@@ -278,15 +279,17 @@ async def handle_session_message(message: discord.Message, session: dict):
         if raw.lower() in ("skip", "-"):
             url, valid = None, True
         elif message.attachments:
-            url, valid = message.attachments[0].url, True
+            url = await utils.persist_image(message.guild, message.attachments[0])
+            valid = url is not None
         elif raw.startswith(("http://", "https://")):
-            url, valid = raw, True
+            url = await utils.persist_image_from_url(message.guild, raw)
+            valid = True
         else:
             url, valid = None, False
 
         await safe_delete(message)
         if not valid:
-            await safe_notice(message.channel, "Lien ou image invalide.")
+            await safe_notice(message.channel, "Lien ou image invalide (ou erreur d'enregistrement, réessaie).")
             return
 
         if step == "pfp":

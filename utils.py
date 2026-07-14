@@ -33,6 +33,99 @@ def is_owner(user_id: int) -> bool:
     return user_id == OWNER_ID
 
 
+# ─────────────────────────────────────────────────────────────────────────────
+# Stockage permanent des images (pp/bannières/badges de division ou de membre).
+#
+# Problème résolu : les URL renvoyées par `message.attachments[0].url` sont des
+# URL cdn.discordapp.com signées (paramètres ex=/is=/hm=) qui EXPIRENT après un
+# certain temps. Les stocker directement en base fait que l'image s'affichait
+# au début puis ne charge plus jamais une fois le lien expiré (symptôme classique :
+# ça marche à l'instant T, puis plus rien, sans erreur côté bot).
+#
+# Solution : le bot re-upload l'image dans un salon texte caché qu'il contrôle
+# (créé automatiquement, un seul par serveur) et réutilise l'URL du fichier posté
+# dans CE message. Cette URL reste valable tant que le message n'est pas supprimé,
+# ce qui est stable dans la durée (contrairement à l'URL brute de la pièce jointe
+# de l'utilisateur, qui elle expire).
+# ─────────────────────────────────────────────────────────────────────────────
+
+STORAGE_CHANNEL_NAME = "yamamotobot-images"
+
+
+async def _get_or_create_storage_channel(guild: discord.Guild):
+    """Récupère (ou crée) le salon caché utilisé pour stocker les images de façon permanente."""
+    channel = discord.utils.get(guild.text_channels, name=STORAGE_CHANNEL_NAME)
+    if channel is not None:
+        return channel
+    if not guild.me.guild_permissions.manage_channels:
+        return None
+    try:
+        overwrites = {
+            guild.default_role: discord.PermissionOverwrite(view_channel=False),
+            guild.me: discord.PermissionOverwrite(view_channel=True, send_messages=True, attach_files=True),
+        }
+        channel = await guild.create_text_channel(
+            STORAGE_CHANNEL_NAME,
+            overwrites=overwrites,
+            reason="Salon de stockage permanent pour les images (pp/bannières/badges).",
+        )
+        return channel
+    except discord.HTTPException:
+        return None
+
+
+async def persist_image(guild: discord.Guild, attachment) -> Optional[str]:
+    """Re-upload une pièce jointe image dans le salon de stockage permanent et
+    renvoie l'URL stable du fichier posté. Renvoie None en cas d'échec (le
+    code appelant doit alors garder l'ancienne valeur plutôt que de stocker un
+    lien qui va expirer).
+    """
+    channel = await _get_or_create_storage_channel(guild)
+    if channel is None:
+        return None
+    try:
+        import io as _io
+        data = await attachment.read()
+        file = discord.File(_io.BytesIO(data), filename=attachment.filename)
+        message = await channel.send(file=file)
+        if message.attachments:
+            return message.attachments[0].url
+        return None
+    except (discord.HTTPException, discord.NotFound, discord.Forbidden):
+        return None
+
+
+async def persist_image_from_url(guild: discord.Guild, url: str, filename: str = "image.gif") -> Optional[str]:
+    """Variante de persist_image pour les URL externes déjà résolues (GIF Tenor/Giphy,
+    lien direct, etc.). Télécharge le média puis le re-upload dans le salon de
+    stockage permanent pour obtenir un lien qui n'expire pas. Renvoie l'URL
+    d'origine si le téléchargement ou le re-upload échoue (comportement dégradé :
+    au moins l'affichage fonctionnera tant que le lien externe est valide).
+    """
+    try:
+        import aiohttp
+        import io as _io
+        async with aiohttp.ClientSession() as http:
+            async with http.get(url, timeout=aiohttp.ClientTimeout(total=10)) as resp:
+                if resp.status != 200:
+                    return url
+                data = await resp.read()
+    except Exception:
+        return url
+
+    channel = await _get_or_create_storage_channel(guild)
+    if channel is None:
+        return url
+    try:
+        file = discord.File(_io.BytesIO(data), filename=filename)
+        message = await channel.send(file=file)
+        if message.attachments:
+            return message.attachments[0].url
+        return url
+    except (discord.HTTPException, discord.NotFound, discord.Forbidden):
+        return url
+
+
 def owner_only():
     """Check de commande : silencieux (aucune réponse) si ce n'est pas l'owner.
 
